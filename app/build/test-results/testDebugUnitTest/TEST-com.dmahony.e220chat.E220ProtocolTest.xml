@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.dmahony.e220chat.E220ProtocolTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-04-19T07:52:39" hostname="7070" time="0.039">
+  <properties/>
+  <testcase name="parse diagnostics response reads nested firmware fields" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.009"/>
+  <testcase name="build config request nests values under config field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.01"/>
+  <testcase name="build send request nests message under body field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.0"/>
+  <testcase name="parse debug response returns nested log text" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.003"/>
+  <testcase name="parse chat response reads nested data messages and marks sent ones delivered" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.016"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
