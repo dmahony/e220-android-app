@@ -5,14 +5,17 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bluetooth
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Pause
@@ -20,9 +23,12 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
@@ -30,6 +36,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
 import com.dmahony.e220chat.ui.theme.E220ChatTheme
 import java.util.Locale
@@ -114,11 +121,25 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             E220ChatTheme(darkTheme = vm.darkTheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                val terminalBackdrop = Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF081018),
+                        MaterialTheme.colorScheme.background,
+                        Color(0xFF0D1720),
+                        Color(0xFF081018)
+                    )
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(terminalBackdrop)
                 ) {
-                    E220ChatRoot(vm)
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.Transparent
+                    ) {
+                        E220ChatRoot(vm)
+                    }
                 }
             }
         }
@@ -131,64 +152,70 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
     val context = LocalContext.current
     var showBluetoothDialog by remember { mutableStateOf(false) }
 
-    Scaffold(
-        topBar = {
-            Column {
-                SmallTopAppBar(
-                    title = { Text("E220 Chat", style = MaterialTheme.typography.titleSmall) },
-                    actions = {
-                        IconButton(onClick = { showBluetoothDialog = true }) {
-                            Icon(
-                                imageVector = Icons.Default.Bluetooth,
-                                contentDescription = "Bluetooth",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                )
+        Scaffold(containerColor = Color.Transparent) { padding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+            ) {
                 TabRow(
                     selectedTabIndex = vm.selectedTab.ordinal,
-                    modifier = Modifier.height(32.dp)
+                    modifier = Modifier.height(30.dp),
+                    containerColor = Color.Transparent,
+                    divider = {},
+                    indicator = { tabPositions ->
+                        TabRowDefaults.PrimaryIndicator(
+                            modifier = Modifier.tabIndicatorOffset(tabPositions[vm.selectedTab.ordinal]),
+                            height = 2.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+                        )
+                    }
                 ) {
                     AppTab.values().forEach { tab ->
                         Tab(
                             selected = vm.selectedTab == tab,
                             onClick = { vm.setTab(tab) },
-                            modifier = Modifier.height(32.dp),
+                            modifier = Modifier.height(30.dp),
                             text = {
                                 Text(
                                     tab.label,
-                                    style = MaterialTheme.typography.labelSmall
+                                    style = MaterialTheme.typography.labelMedium
                                 )
                             }
                         )
                     }
                 }
             }
-        }
-    ) { padding ->
-        when (vm.selectedTab) {
-            AppTab.CHAT -> ChatScreen(
-                vm = vm,
-                modifier = Modifier.padding(padding),
-                onOpenBluetooth = { showBluetoothDialog = true },
-                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
-            )
-            AppTab.SETTINGS -> SettingsScreen(
-                vm = vm,
-                onRefresh = vm::refreshConfig,
-                onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                modifier = Modifier.padding(padding)
-            )
-            AppTab.DEBUG -> DebugScreen(
-                vm = vm,
-                onRefresh = vm::refreshDebugNow,
-                onClear = vm::clearDebug,
-                onTogglePause = vm::toggleDebugPause,
-                modifier = Modifier.padding(padding)
-            )
+
+            when (vm.selectedTab) {
+                AppTab.CHAT -> ChatScreen(
+                    vm = vm,
+                    modifier = Modifier.weight(1f),
+                    onOpenBluetooth = { showBluetoothDialog = true },
+                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+                )
+                AppTab.SETTINGS -> SettingsScreen(
+                    vm = vm,
+                    onRefresh = vm::refreshConfig,
+                    onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                    onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                    onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                    modifier = Modifier.weight(1f)
+                )
+                AppTab.DEBUG -> DebugScreen(
+                    vm = vm,
+                    onRefresh = vm::refreshDebugNow,
+                    onClear = vm::clearDebug,
+                    onTogglePause = vm::toggleDebugPause,
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
     }
 
@@ -218,48 +245,24 @@ private fun ChatScreen(
     onError: (String) -> Unit
 ) {
     var draft by remember { mutableStateOf("") }
+    val connected = vm.connectionState == ConnectionState.CONNECTED
     val scroll = rememberScrollState()
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
-            .padding(horizontal = 4.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+            .padding(horizontal = 3.dp, vertical = 3.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
         vm.chatError?.let { ErrorBanner(it) }
 
-        if (vm.connectionState != ConnectionState.CONNECTED) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Bluetooth,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Text(
-                        "Bluetooth disconnected",
-                        style = MaterialTheme.typography.labelMedium,
-                        modifier = Modifier.weight(1f)
-                    )
-                    TextButton(
-                        onClick = onOpenBluetooth,
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                    ) {
-                        Text("Connect")
-                    }
-                }
-            }
-        }
+        CompactConnectionBanner(
+            connectionHint = vm.connectionHint,
+            selectedDeviceName = vm.selectedBluetoothName,
+            connected = vm.connectionState == ConnectionState.CONNECTED,
+            onOpenBluetooth = onOpenBluetooth
+        )
 
         Box(
             modifier = Modifier
@@ -273,7 +276,7 @@ private fun ChatScreen(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scroll),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     vm.chatMessages.forEach { message ->
                         MessageBubble(message)
@@ -284,41 +287,68 @@ private fun ChatScreen(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(22.dp),
+            shape = RoundedCornerShape(18.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 1.dp
+            tonalElevation = 0.dp,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f))
         ) {
             Row(
-                modifier = Modifier.padding(3.dp),
-                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.padding(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { draft = it },
+                    enabled = connected,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 40.dp),
+                        .heightIn(min = 38.dp),
                     placeholder = {
-                        Text(
-                            if (vm.connectionState == ConnectionState.CONNECTED) "Message" else "Connect Bluetooth to chat"
-                        )
+                        Text(if (connected) "Message" else "Connect Bluetooth to chat")
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(14.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.62f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.20f),
+                        disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.14f),
+                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                        disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        cursorColor = MaterialTheme.colorScheme.primary,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
                 )
                 FilledTonalButton(
                     onClick = {
-                        vm.sendMessage(
-                            draft,
-                            onError = onError,
-                            onSuccess = { draft = "" }
-                        )
+                        if (connected) {
+                            vm.sendMessage(
+                                draft,
+                                onError = onError,
+                                onSuccess = { draft = "" }
+                            )
+                        } else {
+                            onOpenBluetooth()
+                        }
                     },
-                    modifier = Modifier.height(40.dp),
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                    modifier = Modifier.height(38.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.filledTonalButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                 ) {
-                    Text("Send")
+                    Text(if (connected) "Send" else "Connect")
                 }
             }
         }
@@ -329,30 +359,44 @@ private fun ChatScreen(
 private fun CompactConnectionBanner(
     connectionHint: String,
     selectedDeviceName: String,
+    connected: Boolean,
     onOpenBluetooth: () -> Unit
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 10.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow
+            .padding(horizontal = 8.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.Bluetooth,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Surface(
+                shape = RoundedCornerShape(999.dp),
+                color = if (connected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+                border = BorderStroke(
+                    1.dp,
+                    if (connected) MaterialTheme.colorScheme.primary.copy(alpha = 0.24f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f)
+                )
+            ) {
+                Text(
+                    text = if (connected) "LINK UP" else "LINK DOWN",
+                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (connected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
                     text = selectedDeviceName.ifBlank { "No paired device selected" },
-                    style = MaterialTheme.typography.labelLarge
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = connectionHint,
@@ -362,8 +406,11 @@ private fun CompactConnectionBanner(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            TextButton(onClick = onOpenBluetooth) {
-                Text("Connect")
+            TextButton(
+                onClick = onOpenBluetooth,
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+            ) {
+                Text(if (connected) "Manage" else "Connect")
             }
         }
     }
@@ -458,36 +505,61 @@ private fun BluetoothDeviceDialog(
 @Composable
 private fun MessageBubble(message: ChatMessage) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 2.dp),
         horizontalArrangement = if (message.sent) Arrangement.End else Arrangement.Start
     ) {
         Surface(
             shape = if (message.sent) {
-                RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 7.dp)
+                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 18.dp, bottomEnd = 10.dp)
             } else {
-                RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 7.dp, bottomEnd = 18.dp)
+                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 10.dp, bottomEnd = 18.dp)
             },
-            color = if (message.sent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.fillMaxWidth(0.68f)
+            color = if (message.sent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f) else MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+            border = BorderStroke(
+                1.dp,
+                if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
+            ),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+            modifier = Modifier.fillMaxWidth(0.72f)
         ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.Bottom
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
+                        border = BorderStroke(1.dp, if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f))
+                    ) {
+                        Text(
+                            text = if (message.sent) "TX" else "RX",
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (message.sent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (message.sent && message.delivered) {
+                        Text(
+                            text = "DELIVERED",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
                 Text(
                     text = message.text,
-                    modifier = Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                 )
-                if (message.sent && message.delivered) {
-                    Icon(
-                        imageVector = Icons.Default.Done,
-                        contentDescription = "Sent",
-                        modifier = Modifier.size(12.dp)
-                    )
-                }
             }
         }
     }
@@ -500,7 +572,12 @@ private fun ConfigSectionCard(
     modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    ElevatedCard(modifier = modifier.fillMaxWidth()) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
         Column(
             modifier = Modifier.padding(10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -516,6 +593,7 @@ private fun ConfigSectionCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(
     vm: E220ChatViewModel,
@@ -547,9 +625,9 @@ private fun SettingsScreen(
                     "Manual-backed presets + ranges",
                     style = MaterialTheme.typography.titleSmall
                 )
-                Row(
-                    modifier = Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     MiniChip("Freq ${vm.config.freq} MHz")
                     MiniChip("Power ${vm.config.txpower}")
@@ -889,6 +967,20 @@ private fun ConfigField(
         keyboardOptions = KeyboardOptions(
             keyboardType = keyboardType,
             imeAction = ImeAction.Next
+        ),
+        shape = RoundedCornerShape(14.dp),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = MaterialTheme.colorScheme.primary,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+            focusedLabelColor = MaterialTheme.colorScheme.primary,
+            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            cursorColor = MaterialTheme.colorScheme.primary,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
         )
     )
 }
@@ -920,7 +1012,21 @@ private fun DropdownConfigField(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .menuAnchor()
-                .fillMaxWidth()
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedBorderColor = MaterialTheme.colorScheme.primary,
+                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                focusedLabelColor = MaterialTheme.colorScheme.primary,
+                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                cursorColor = MaterialTheme.colorScheme.primary,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         )
         ExposedDropdownMenu(
             expanded = expanded,
