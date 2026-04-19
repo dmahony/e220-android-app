@@ -1,14 +1,329 @@
 
+package com.dmahony.e220chat
+
+import android.os.Bundle
+import android.widget.Toast
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.layout.IntrinsicSize
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModelProvider
+import com.dmahony.e220chat.ui.theme.E220ChatTheme
+import java.util.Locale
+
+private fun formatMHz(value: Double): String = String.format(Locale.US, "%.3f", value)
+
+private val channelOptions: List<Pair<String, String>> = (0..80).map { channel ->
+    val frequency = 850.125 + channel
+    "Ch $channel — ${formatMHz(frequency)} MHz" to formatMHz(frequency)
+}
+
+private val txPowerOptions = listOf(
+    "22 dBm (0)" to "0",
+    "17 dBm (1)" to "1",
+    "14 dBm (2)" to "2",
+    "10 dBm (3)" to "3"
+)
+
+private val baudOptions = listOf(
+    "1200 (0)" to "0",
+    "2400 (1)" to "1",
+    "4800 (2)" to "2",
+    "9600 (3)" to "3",
+    "19200 (4)" to "4",
+    "38400 (5)" to "5",
+    "57600 (6)" to "6",
+    "115200 (7)" to "7"
+)
+
+private val parityOptions = listOf(
+    "None (0)" to "0",
+    "Odd (1)" to "1",
+    "Even (2)" to "2"
+)
+
+private val airRateOptions = listOf(
+    "2.4 Kbps (0)" to "0",
+    "2.4 Kbps (1)" to "1",
+    "2.4 Kbps (2)" to "2",
+    "4.8 Kbps (3)" to "3",
+    "9.6 Kbps (4)" to "4",
+    "19.2 Kbps (5)" to "5",
+    "38.4 Kbps (6)" to "6",
+    "62.5 Kbps (7)" to "7"
+)
+
+private val txModeOptions = listOf(
+    "Transparent (0)" to "0",
+    "Fixed-point (1)" to "1"
+)
+
+private val onOffOptions = listOf(
+    "Off (0)" to "0",
+    "On (1)" to "1"
+)
+
+private val packetLengthOptions = listOf(
+    "200 bytes (0)" to "0",
+    "128 bytes (1)" to "1",
+    "64 bytes (2)" to "2",
+    "32 bytes (3)" to "3"
+)
+
+private val wakeTimeOptions = listOf(
+    "500 ms (0)" to "0",
+    "1000 ms (1)" to "1",
+    "1500 ms (2)" to "2",
+    "2000 ms (3)" to "3",
+    "2500 ms (4)" to "4",
+    "3000 ms (5)" to "5",
+    "3500 ms (6)" to "6",
+    "4000 ms (7)" to "7"
+)
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val vm = ViewModelProvider(
+            this,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+        )[E220ChatViewModel::class.java]
+
+        setContent {
+            E220ChatTheme(darkTheme = vm.darkTheme) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
+                    E220ChatRoot(vm)
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun E220ChatRoot(vm: E220ChatViewModel) {
+    val context = LocalContext.current
+    var showBluetoothDialog by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            Column {
+                SmallTopAppBar(
+                    title = { Text("E220 Chat", style = MaterialTheme.typography.titleSmall) },
+                    actions = {
+                        IconButton(onClick = { showBluetoothDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Default.Bluetooth,
+                                contentDescription = "Bluetooth",
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                )
+                TabRow(
+                    selectedTabIndex = vm.selectedTab.ordinal,
+                    modifier = Modifier.height(32.dp)
+                ) {
+                    AppTab.values().forEach { tab ->
+                        Tab(
+                            selected = vm.selectedTab == tab,
+                            onClick = { vm.setTab(tab) },
+                            modifier = Modifier.height(32.dp),
+                            text = {
+                                Text(
+                                    tab.label,
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    ) { padding ->
+        when (vm.selectedTab) {
+            AppTab.CHAT -> ChatScreen(
+                vm = vm,
+                modifier = Modifier.padding(padding),
+                onOpenBluetooth = { showBluetoothDialog = true },
+                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+            )
+            AppTab.SETTINGS -> SettingsScreen(
+                vm = vm,
+                onRefresh = vm::refreshConfig,
+                onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
+                modifier = Modifier.padding(padding)
+            )
+            AppTab.DEBUG -> DebugScreen(
+                vm = vm,
+                onRefresh = vm::refreshDebugNow,
+                onClear = vm::clearDebug,
+                onTogglePause = vm::toggleDebugPause,
+                modifier = Modifier.padding(padding)
+            )
+        }
+    }
+
+    if (showBluetoothDialog) {
+        BluetoothDeviceDialog(
+            vm = vm,
+            onDismiss = { showBluetoothDialog = false },
+            onRefresh = vm::refreshBluetoothDevices,
+            onConnect = { device ->
+                vm.connectBluetooth(
+                    device = device,
+                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                    onSuccess = { showBluetoothDialog = false }
+                )
+            },
+            onDisconnect = vm::disconnectBluetooth,
+            onPick = vm::selectBluetoothDevice
+        )
+    }
+}
+
+@Composable
+private fun ChatScreen(
+    vm: E220ChatViewModel,
+    modifier: Modifier = Modifier,
+    onOpenBluetooth: () -> Unit,
+    onError: (String) -> Unit
+) {
+    var draft by remember { mutableStateOf("") }
+    val scroll = rememberScrollState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .imePadding()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        vm.chatError?.let { ErrorBanner(it) }
+
+        if (vm.connectionState != ConnectionState.CONNECTED) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Bluetooth,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        "Bluetooth disconnected",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = onOpenBluetooth,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                    ) {
+                        Text("Connect")
+                    }
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f, fill = true)
+        ) {
+            if (vm.chatMessages.isEmpty()) {
+                EmptyThreadHint(connected = vm.connectionState == ConnectionState.CONNECTED)
+            } else {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    vm.chatMessages.forEach { message ->
+                        MessageBubble(message)
+                    }
+                }
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(22.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 1.dp
+        ) {
+            Row(
+                modifier = Modifier.padding(3.dp),
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                verticalAlignment = Alignment.Bottom
+            ) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 40.dp),
+                    placeholder = {
+                        Text(
+                            if (vm.connectionState == ConnectionState.CONNECTED) "Message" else "Connect Bluetooth to chat"
+                        )
+                    },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp)
+                )
+                FilledTonalButton(
+                    onClick = {
+                        vm.sendMessage(
+                            draft,
+                            onError = onError,
+                            onSuccess = { draft = "" }
+                        )
+                    },
+                    modifier = Modifier.height(40.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                ) {
+                    Text("Send")
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun CompactConnectionBanner(
@@ -59,13 +374,13 @@ private fun EmptyThreadHint(connected: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp, vertical = 24.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Text(
             text = if (connected) "No messages yet" else "Chat stays clear until the link is live",
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
@@ -148,32 +463,55 @@ private fun MessageBubble(message: ChatMessage) {
     ) {
         Surface(
             shape = if (message.sent) {
-                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 22.dp, bottomEnd = 8.dp)
+                RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 18.dp, bottomEnd = 7.dp)
             } else {
-                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 8.dp, bottomEnd = 22.dp)
+                RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 7.dp, bottomEnd = 18.dp)
             },
             color = if (message.sent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
             contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.fillMaxWidth(0.78f)
+            modifier = Modifier.fillMaxWidth(0.68f)
         ) {
             Row(
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.Bottom
             ) {
                 Text(
                     text = message.text,
                     modifier = Modifier.weight(1f, fill = false),
-                    style = MaterialTheme.typography.bodyMedium
+                    style = MaterialTheme.typography.bodySmall
                 )
                 if (message.sent && message.delivered) {
                     Icon(
                         imageVector = Icons.Default.Done,
                         contentDescription = "Sent",
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(12.dp)
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ConfigSectionCard(
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    ElevatedCard(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            content()
         }
     }
 }
@@ -187,103 +525,221 @@ private fun SettingsScreen(
     onReboot: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("All firmware settings from the original web configurator are available here.")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiniChip("Freq ${vm.config.freq} MHz")
-                MiniChip("Addr ${vm.config.addr}")
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Channel dropdown (0-83)
-                val channelOptions = (0..83).map { it.toString() to it.toString() }
-                DropdownConfigField("Channel", vm.config.freq, options = channelOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("freq", it) }
-                // TX power dropdown with common levels
-                val powerOptions = listOf(
-                    "22dBm (0)" to "0",
-                    "17dBm (1)" to "1",
-                    "14dBm (2)" to "2",
-                    "10dBm (3)" to "3",
-                    "30dBm (0)" to "0",
-                    "27dBm (1)" to "1",
-                    "24dBm (2)" to "2",
-                    "21dBm (3)" to "3",
-                    "18dBm (4)" to "4",
-                    "15dBm (5)" to "5",
-                    "12dBm (6)" to "6",
-                    "9dBm (7)" to "7",
-                    "6dBm (8)" to "8",
-                    "3dBm (9)" to "9",
-                    "0dBm (10)" to "10"
+    val scroll = rememberScrollState()
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        vm.configError?.let { ErrorBanner(it) }
+        vm.configStatus?.takeIf { it.isNotBlank() }?.let { SuccessBanner(it) }
+
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            tonalElevation = 1.dp
+        ) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    "Manual-backed presets + ranges",
+                    style = MaterialTheme.typography.titleSmall
                 )
-                DropdownConfigField("TX power", vm.config.txpower, options = powerOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("txpower", it) }
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MiniChip("Freq ${vm.config.freq} MHz")
+                    MiniChip("Power ${vm.config.txpower}")
+                    MiniChip("Baud ${vm.config.baud}")
+                    MiniChip("Mode ${vm.config.txmode}")
+                }
+            }
+        }
+
+                ConfigSectionCard(
+                    title = "RF link",
+                    subtitle = "Carrier frequency, transmit power, air rate, transmission mode, and LBT."
+                ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DropdownConfigField(
+                    label = "Channel / frequency",
+                    selectedValue = vm.config.freq,
+                    options = channelOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("freq", it) }
+                DropdownConfigField(
+                    label = "TX power",
+                    selectedValue = vm.config.txpower,
+                    options = txPowerOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("txpower", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // Baud rate dropdown
-                val baudOptions = listOf(
-                    "1200 (0)" to "0",
-                    "2400 (1)" to "1",
-                    "4800 (2)" to "2",
-                    "9600 (3)" to "3",
-                    "19200 (4)" to "4",
-                    "38400 (5)" to "5",
-                    "57600 (6)" to "6",
-                    "115200 (7)" to "7"
-                )
-                DropdownConfigField("Baud", vm.config.baud, options = baudOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("baud", it) }
-                // Air rate dropdown
-                val airRateOptions = listOf(
-                    "2.4Kbps (0)" to "0",
-                    "2.4Kbps (1)" to "1",
-                    "2.4Kbps (2)" to "2",
-                    "4.8Kbps (3)" to "3",
-                    "9.6Kbps (4)" to "4",
-                    "19.2Kbps (5)" to "5",
-                    "38.4Kbps (6)" to "6",
-                    "62.5Kbps (7)" to "7"
-                )
-                DropdownConfigField("Air rate", vm.config.airrate, options = airRateOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("airrate", it) }
+                DropdownConfigField(
+                    label = "Air rate",
+                    selectedValue = vm.config.airrate,
+                    options = airRateOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("airrate", it) }
+                DropdownConfigField(
+                    label = "TX mode",
+                    selectedValue = vm.config.txmode,
+                    options = txModeOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("txmode", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("Address", vm.config.addr, modifier = Modifier.weight(1f)) { vm.setConfigField("addr", it) }
-                ConfigField("Dest Address", vm.config.dest, modifier = Modifier.weight(1f)) { vm.setConfigField("dest", it) }
+                DropdownConfigField(
+                    label = "LBT",
+                    selectedValue = vm.config.lbt,
+                    options = onOffOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("lbt", it) }
+                DropdownConfigField(
+                    label = "WOR cycle",
+                    selectedValue = vm.config.worCycle,
+                    options = wakeTimeOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("wor_cycle", it) }
+            }
+        }
+
+        ConfigSectionCard(
+            title = "Serial link",
+            subtitle = "UART baud, parity, packet length, and frame-drop timing."
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DropdownConfigField(
+                    label = "Baud",
+                    selectedValue = vm.config.baud,
+                    options = baudOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("baud", it) }
+                DropdownConfigField(
+                    label = "Parity",
+                    selectedValue = vm.config.parity,
+                    options = parityOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("parity", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("Packet Length", vm.config.subpkt, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("subpkt", it) }
-                ConfigField("Parity", vm.config.parity, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("parity", it) }
+                DropdownConfigField(
+                    label = "Packet length",
+                    selectedValue = vm.config.subpkt,
+                    options = packetLengthOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("subpkt", it) }
+                ConfigField(
+                    label = "URXT",
+                    value = vm.config.urxt,
+                    supportingText = "Manual range: 1–255 byte times. Default 3.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("urxt", it) }
+            }
+        }
+
+        ConfigSectionCard(
+            title = "Addressing & encryption",
+            subtitle = "Communication address, destination, and 16-bit key fields."
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField(
+                    label = "Address",
+                    value = vm.config.addr,
+                    supportingText = "Manual range: 0–65535. 65535 is broadcast.",
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("addr", it) }
+                ConfigField(
+                    label = "Destination",
+                    value = vm.config.dest,
+                    supportingText = "Manual range: 0–65535. Defaults to 65535.",
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("dest", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                // TX mode dropdown
-                val txModeOptions = listOf(
-                    "Transparent (0)" to "0",
-                    "Fixed-point (1)" to "1"
-                )
-                DropdownConfigField("TX mode", vm.config.txmode, options = txModeOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("txmode", it) }
-                // LBT dropdown
-                val lbtOptions = listOf(
-                    "Off (0)" to "0",
-                    "On (1)" to "1"
-                )
-                DropdownConfigField("LBT", vm.config.lbt, options = lbtOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("lbt", it) }
+                ConfigField(
+                    label = "Crypto high",
+                    value = vm.config.cryptH,
+                    supportingText = "App-specific 16-bit key high byte.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("crypt_h", it) }
+                ConfigField(
+                    label = "Crypto low",
+                    value = vm.config.cryptL,
+                    supportingText = "App-specific 16-bit key low byte.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("crypt_l", it) }
+            }
+        }
+
+        ConfigSectionCard(
+            title = "RSSI and save",
+            subtitle = "Optional RSSI helpers, LBT threshold, timeout, and save mode."
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                DropdownConfigField(
+                    label = "RSSI noise",
+                    selectedValue = vm.config.rssiNoise,
+                    options = onOffOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("rssi_noise", it) }
+                DropdownConfigField(
+                    label = "RSSI byte",
+                    selectedValue = vm.config.rssiByte,
+                    options = onOffOptions,
+                    modifier = Modifier.weight(1f)
+                ) { vm.setConfigField("rssi_byte", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("LBT RSSI", vm.config.lbrRssi, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("lbr_rssi", it) }
-                ConfigField("LBT Timeout", vm.config.lbrTimeout, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("lbr_timeout", it) }
+                ConfigField(
+                    label = "LBT RSSI",
+                    value = vm.config.lbrRssi,
+                    supportingText = "Manual range: 0 to -128 dBm. Default -55.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("lbr_rssi", it) }
+                ConfigField(
+                    label = "LBT timeout",
+                    value = vm.config.lbrTimeout,
+                    supportingText = "Manual range: 0–65535 ms. Default 2000.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("lbr_timeout", it) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("Frame Drop", vm.config.urxt, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("urxt", it) }
-                ConfigField("RSSI noise", vm.config.rssiNoise, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("rssi_noise", it) }
+                ConfigField(
+                    label = "Save type",
+                    value = vm.config.saveType,
+                    supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
+                    modifier = Modifier.weight(1f),
+                    keyboardType = KeyboardType.Number
+                ) { vm.setConfigField("savetype", it) }
+                Spacer(modifier = Modifier.weight(1f))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("RSSI byte", vm.config.rssiByte, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("rssi_byte", it) }
-                ConfigField("WOR cycle", vm.config.worCycle, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("wor_cycle", it) }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onRefresh, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.Refresh, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Refresh")
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("Crypto high", vm.config.cryptH, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("crypt_h", it) }
-                ConfigField("Crypto low", vm.config.cryptL, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("crypt_l", it) }
+            FilledTonalButton(onClick = onQuickSave, modifier = Modifier.weight(1f)) {
+                Text("Quick save")
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField("Save Type", vm.config.saveType, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("savetype", it) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = onSave, modifier = Modifier.weight(1f)) {
+                Text("Save config")
+            }
+            FilledTonalButton(onClick = onReboot, modifier = Modifier.weight(1f)) {
+                Text("Reboot ESP32")
             }
         }
     }
@@ -420,6 +876,7 @@ private fun ConfigField(
     value: String,
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
+    supportingText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
@@ -427,8 +884,9 @@ private fun ConfigField(
         onValueChange = onValueChange,
         modifier = modifier,
         label = { Text(label) },
+        supportingText = supportingText?.let { { Text(it) } },
         singleLine = true,
-        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+        keyboardOptions = KeyboardOptions(
             keyboardType = keyboardType,
             imeAction = ImeAction.Next
         )
@@ -436,36 +894,46 @@ private fun ConfigField(
 }
 
 // Dropdown version for fields with limited options
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DropdownConfigField(
     label: String,
     selectedValue: String,
     options: List<Pair<String, String>>, // display, actual
     modifier: Modifier = Modifier,
+    supportingText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayText = options.find { it.second == selectedValue }?.first ?: selectedValue
     ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { expanded = it }
+        onExpandedChange = { expanded = it },
+        modifier = modifier
     ) {
         OutlinedTextField(
             value = displayText,
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
+            supportingText = supportingText?.let { { Text(it) } },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = modifier.width(IntrinsicSize.Min)
+            modifier = Modifier
+                .menuAnchor()
+                .fillMaxWidth()
         )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
             options.forEach { (display, actual) ->
-                DropdownMenuItem(onClick = {
-                    onValueChange(actual)
-                    expanded = false
-                }) {
-                    Text(display)
-                }
+                DropdownMenuItem(
+                    text = { Text(display) },
+                    onClick = {
+                        onValueChange(actual)
+                        expanded = false
+                    }
+                )
             }
         }
     }
