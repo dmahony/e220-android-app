@@ -162,18 +162,18 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                 color = MaterialTheme.colorScheme.surfaceContainerLow,
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
             ) {
                 TabRow(
                     selectedTabIndex = vm.selectedTab.ordinal,
-                    modifier = Modifier.height(30.dp),
+                    modifier = Modifier.height(26.dp),
                     containerColor = Color.Transparent,
                     divider = {},
                     indicator = { tabPositions ->
                         TabRowDefaults.PrimaryIndicator(
                             modifier = Modifier.tabIndicatorOffset(tabPositions[vm.selectedTab.ordinal]),
-                            height = 2.dp,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+                            height = 1.5.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.68f)
                         )
                     }
                 ) {
@@ -181,11 +181,11 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                         Tab(
                             selected = vm.selectedTab == tab,
                             onClick = { vm.setTab(tab) },
-                            modifier = Modifier.height(30.dp),
+                            modifier = Modifier.height(26.dp),
                             text = {
                                 Text(
                                     tab.label,
-                                    style = MaterialTheme.typography.labelMedium
+                                    style = MaterialTheme.typography.labelSmall
                                 )
                             }
                         )
@@ -247,6 +247,7 @@ private fun ChatScreen(
     var draft by remember { mutableStateOf("") }
     val connected = vm.connectionState == ConnectionState.CONNECTED
     val scroll = rememberScrollState()
+    val composerHeight = 56.dp
 
     Column(
         modifier = modifier
@@ -295,7 +296,7 @@ private fun ChatScreen(
             Row(
                 modifier = Modifier.padding(2.dp),
                 horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.Bottom
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
                     value = draft,
@@ -303,10 +304,11 @@ private fun ChatScreen(
                     enabled = connected,
                     modifier = Modifier
                         .weight(1f)
-                        .heightIn(min = 38.dp),
+                        .height(composerHeight),
                     placeholder = {
                         Text(if (connected) "Message" else "Connect Bluetooth to chat")
                     },
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
                     singleLine = true,
                     shape = RoundedCornerShape(12.dp),
                     colors = OutlinedTextFieldDefaults.colors(
@@ -340,7 +342,7 @@ private fun ChatScreen(
                             onOpenBluetooth()
                         }
                     },
-                    modifier = Modifier.height(38.dp),
+                    modifier = Modifier.height(composerHeight),
                     shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
