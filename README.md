@@ -2,6 +2,8 @@
 
 A lightweight Android chat client for E220-based radio devices. The app connects to a nearby BLE companion device, exchanges JSON requests over GATT, and provides a chat-first UI for sending and receiving messages, viewing device settings, and checking debug/diagnostic status.
 
+The matching ESP32 companion firmware is included in `firmware/esp32-e220-web/`.
+
 ## Features
 
 - BLE scan and connect flow
@@ -44,11 +46,13 @@ The app talks to the device over BLE using JSON messages with endpoints such as:
 
 ## Project structure
 
-- `app/src/main/java/com/dmahony/e220chat/` - app code
+- `app/src/main/java/com/dmahony/e220chat/` - Android app code
 - `app/src/main/res/` - resources and themes
 - `app/src/test/` - unit tests
+- `firmware/esp32-e220-web/` - ESP32 companion firmware
 
 ## Notes
 
 - The app uses Jetpack Compose and Material 3.
 - Connection details are saved locally so the last selected device can be reused.
+- The firmware folder contains the BLE/NUS ESP32 project that matches this app.
