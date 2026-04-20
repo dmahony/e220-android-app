@@ -55,7 +55,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         private set
     var connectionState by mutableStateOf(ConnectionState.DISCONNECTED)
         private set
-    var connectionHint by mutableStateOf("Connect a paired Bluetooth device")
+    var connectionHint by mutableStateOf("Connect to a nearby BLE device")
         private set
 
     private var lastChatSequence = -1
@@ -63,7 +63,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     private var debugPollJob: Job? = null
 
     init {
-        refreshBluetoothDevices()
+        viewModelScope.launch { refreshBluetoothDevices() }
         if (repo.isConnected) {
             connectionState = ConnectionState.CONNECTED
             connectionHint = selectedBluetoothName.ifBlank { "Bluetooth connected" }
@@ -83,11 +83,13 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshBluetoothDevices() {
-        bluetoothDevices = repo.getPairedDevices()
-        selectedBluetoothAddress = repo.selectedDeviceAddress.orEmpty()
-        selectedBluetoothName = repo.selectedDeviceName.orEmpty()
-        if (selectedBluetoothName.isBlank() && selectedBluetoothAddress.isNotBlank()) {
-            selectedBluetoothName = bluetoothDevices.firstOrNull { it.address == selectedBluetoothAddress }?.name.orEmpty()
+        viewModelScope.launch {
+            bluetoothDevices = repo.scanBleDevices()
+            selectedBluetoothAddress = repo.selectedDeviceAddress.orEmpty()
+            selectedBluetoothName = repo.selectedDeviceName.orEmpty()
+            if (selectedBluetoothName.isBlank() && selectedBluetoothAddress.isNotBlank()) {
+                selectedBluetoothName = bluetoothDevices.firstOrNull { it.address == selectedBluetoothAddress }?.name.orEmpty()
+            }
         }
     }
 
@@ -131,7 +133,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (device != null) {
             connectBluetooth(device, onError)
         } else {
-            onError("Select a paired Bluetooth device first")
+            onError("Select a nearby BLE device first")
         }
     }
 
@@ -156,14 +158,16 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     return@launch
                 }
                 if (!repo.isConnected) {
-                    onError("Connect to Bluetooth first")
+                    onError("Connect to BLE first")
                     return@launch
                 }
                 repo.sendMessage(trimmed)
                 operationStatus = operationStatus.copy(type = "send", state = "success", message = "Message sent")
                 connectionHint = "Sent to radio"
                 refreshChat()
-                refreshDebugNow()
+                if (selectedTab == AppTab.DEBUG) {
+                    refreshDebugNow()
+                }
                 syncTransportLogs()
                 onSuccess()
             } catch (e: Exception) {
@@ -242,7 +246,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 if (!repo.isConnected) {
-                    onError("Connect to Bluetooth first")
+                    onError("Connect to BLE first")
                     return@launch
                 }
                 config = repo.saveConfig(config)
@@ -268,7 +272,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 if (!repo.isConnected) {
-                    onError("Connect to Bluetooth first")
+                    onError("Connect to BLE first")
                     return@launch
                 }
                 repo.reboot()

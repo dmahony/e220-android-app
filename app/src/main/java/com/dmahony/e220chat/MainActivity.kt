@@ -1,10 +1,15 @@
 
 package com.dmahony.e220chat
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -21,6 +26,7 @@ import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
@@ -29,11 +35,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -151,8 +159,39 @@ class MainActivity : ComponentActivity() {
 private fun E220ChatRoot(vm: E220ChatViewModel) {
     val context = LocalContext.current
     var showBluetoothDialog by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.isNotEmpty() && grants.values.all { it }) {
+            showBluetoothDialog = true
+            vm.refreshBluetoothDevices()
+        } else {
+            Toast.makeText(context, "Bluetooth permissions are required for BLE scanning", Toast.LENGTH_LONG).show()
+        }
+    }
+    val bluetoothPermissions = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+    val openBluetoothPicker: () -> Unit = {
+        val missing = bluetoothPermissions.any { permission ->
+            ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing) {
+            permissionLauncher.launch(bluetoothPermissions)
+        } else {
+            showBluetoothDialog = true
+            vm.refreshBluetoothDevices()
+        }
+    }
 
-        Scaffold(containerColor = Color.Transparent) { padding ->
+    Scaffold(containerColor = Color.Transparent) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -197,7 +236,7 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                 AppTab.CHAT -> ChatScreen(
                     vm = vm,
                     modifier = Modifier.weight(1f),
-                    onOpenBluetooth = { showBluetoothDialog = true },
+                    onOpenBluetooth = openBluetoothPicker,
                     onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                 )
                 AppTab.SETTINGS -> SettingsScreen(
@@ -245,16 +284,22 @@ private fun ChatScreen(
     onError: (String) -> Unit
 ) {
     var draft by remember { mutableStateOf("") }
+    var composerFocused by remember { mutableStateOf(false) }
     val connected = vm.connectionState == ConnectionState.CONNECTED
     val scroll = rememberScrollState()
-    val composerHeight = 56.dp
+
+    LaunchedEffect(composerFocused, vm.chatMessages.size) {
+        if (vm.chatMessages.isNotEmpty() && (composerFocused || connected)) {
+            scroll.scrollTo(scroll.maxValue)
+        }
+    }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .imePadding()
-            .padding(horizontal = 3.dp, vertical = 3.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp)
+            .padding(horizontal = 2.dp, vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         vm.chatError?.let { ErrorBanner(it) }
 
@@ -288,14 +333,14 @@ private fun ChatScreen(
 
         Surface(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
+            shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             tonalElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.22f))
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
         ) {
             Row(
-                modifier = Modifier.padding(2.dp),
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedTextField(
@@ -304,17 +349,18 @@ private fun ChatScreen(
                     enabled = connected,
                     modifier = Modifier
                         .weight(1f)
-                        .height(composerHeight),
+                        .height(52.dp)
+                        .onFocusChanged { composerFocused = it.isFocused },
                     placeholder = {
-                        Text(if (connected) "Message" else "Connect Bluetooth to chat")
+                        Text(if (connected) "Message" else "Connect BLE to chat")
                     },
                     textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.62f),
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.20f),
-                        disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.14f),
+                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
+                        disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.10f),
                         focusedTextColor = MaterialTheme.colorScheme.onSurface,
                         unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                         disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -342,15 +388,19 @@ private fun ChatScreen(
                             onOpenBluetooth()
                         }
                     },
-                    modifier = Modifier.height(composerHeight),
-                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.height(52.dp),
+                    shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                    contentPadding = PaddingValues(horizontal = if (connected) 14.dp else 12.dp, vertical = 0.dp)
                 ) {
-                    Text(if (connected) "Send" else "Connect")
+                    if (connected) {
+                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
+                    } else {
+                        Text("Connect")
+                    }
                 }
             }
         }
@@ -367,16 +417,16 @@ private fun CompactConnectionBanner(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp),
-        shape = RoundedCornerShape(16.dp),
+            .padding(horizontal = 4.dp),
+        shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         tonalElevation = 0.dp,
         shadowElevation = 0.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f))
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Surface(
@@ -396,7 +446,7 @@ private fun CompactConnectionBanner(
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
-                    text = selectedDeviceName.ifBlank { "No paired device selected" },
+                    text = selectedDeviceName.ifBlank { "No BLE device selected" },
                     style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -404,7 +454,7 @@ private fun CompactConnectionBanner(
                     text = connectionHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
+                    maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -451,11 +501,11 @@ private fun BluetoothDeviceDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Paired Bluetooth devices") },
+        title = { Text("Nearby BLE devices") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Pair the ESP32 in Android Bluetooth settings first, then select it here.",
+                    "Turn on BLE on the ESP32, then refresh to scan and select it here. If Android scan results are empty, paired devices will still appear below.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -466,7 +516,7 @@ private fun BluetoothDeviceDialog(
                     }
                 }
                 if (vm.bluetoothDevices.isEmpty()) {
-                    Text("No paired Bluetooth devices found.")
+                    Text("No BLE devices found.")
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         vm.bluetoothDevices.forEach { device ->
@@ -509,59 +559,46 @@ private fun MessageBubble(message: ChatMessage) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 2.dp),
+            .padding(horizontal = 0.dp),
         horizontalArrangement = if (message.sent) Arrangement.End else Arrangement.Start
     ) {
-        Surface(
-            shape = if (message.sent) {
-                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 18.dp, bottomEnd = 10.dp)
-            } else {
-                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 10.dp, bottomEnd = 18.dp)
-            },
-            color = if (message.sent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f) else MaterialTheme.colorScheme.surfaceContainerLow,
-            contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-            border = BorderStroke(
-                1.dp,
-                if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)
-            ),
-            tonalElevation = 0.dp,
-            shadowElevation = 0.dp,
-            modifier = Modifier.fillMaxWidth(0.72f)
-        ) {
-            Column(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            val bubbleMaxWidth = maxWidth * 0.82f
+            Surface(
+                shape = if (message.sent) {
+                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 14.dp, bottomEnd = 8.dp)
+                } else {
+                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 8.dp, bottomEnd = 14.dp)
+                },
+                color = if (message.sent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f) else MaterialTheme.colorScheme.surfaceContainerLow,
+                contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                border = BorderStroke(
+                    1.dp,
+                    if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)
+                ),
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
+                modifier = Modifier
+                    .widthIn(max = bubbleMaxWidth)
+                    .align(if (message.sent) Alignment.CenterEnd else Alignment.CenterStart)
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(999.dp),
-                        color = if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-                        border = BorderStroke(1.dp, if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f))
-                    ) {
-                        Text(
-                            text = if (message.sent) "TX" else "RX",
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (message.sent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    Text(
+                        text = message.text,
+                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
+                        color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                    )
                     if (message.sent && message.delivered) {
                         Text(
-                            text = "DELIVERED",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "✓ Delivered",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                Text(
-                    text = message.text,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-                )
             }
         }
     }
