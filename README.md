@@ -4,6 +4,10 @@ A lightweight Android chat client for E220-based radio devices. The app connects
 
 The matching ESP32 companion firmware is included in `firmware/esp32-e220-web/`.
 
+## Screenshot
+
+![E220 Android app main screen](assets/e220-chat-home.png)
+
 ## Features
 
 - BLE scan and connect flow
@@ -50,6 +54,7 @@ The app talks to the device over BLE using JSON messages with endpoints such as:
 - `app/src/main/res/` - resources and themes
 - `app/src/test/` - unit tests
 - `firmware/esp32-e220-web/` - ESP32 companion firmware
+- `assets/e220-chat-home.png` - screenshot used in this README
 
 ## Notes
 
