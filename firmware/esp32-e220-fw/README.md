@@ -87,6 +87,6 @@ If your board appears on a different serial port, replace `/dev/ttyUSB0` accordi
 
 ## Notes
 
-- This firmware is Bluetooth-only; it does not use WiFi, an access point, or a web UI at runtime.
+- This firmware is Bluetooth-only; it does not expose an HTTP interface at runtime.
 - The E220 radio link still uses the module's UART interface internally.
 - If you change the Bluetooth device name or protocol, update the Android app to match.
