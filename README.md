@@ -44,11 +44,13 @@ The app talks to the device over BLE using JSON messages with endpoints such as:
 
 ## Project structure
 
-- `app/src/main/java/com/dmahony/e220chat/` - app code
+- `app/src/main/java/com/dmahony/e220chat/` - Android app code
 - `app/src/main/res/` - resources and themes
 - `app/src/test/` - unit tests
+- `firmware/esp32-e220-web/` - companion ESP32 E220 firmware project
 
 ## Notes
 
 - The app uses Jetpack Compose and Material 3.
 - Connection details are saved locally so the last selected device can be reused.
+- The ESP32 firmware project is included in `firmware/esp32-e220-web/` for the companion device.
