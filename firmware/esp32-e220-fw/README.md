@@ -1,11 +1,11 @@
 # ESP32 E220 Bluetooth Firmware
 
 Bluetooth-only companion firmware for the E220 Android app in this repo.
-It runs on an ESP32 + Ebyte E220 LoRa module, exposes a simple Bluetooth SPP link to the Android app, and forwards chat/config requests to the radio.
+It runs on an ESP32 + Ebyte E220 LoRa module, exposes a BLE GATT link to the Android app, and forwards chat/config requests to the radio.
 
 ## What it does
 
-- Pairs with the Android app over classic Bluetooth (SPP)
+- Pairs with the Android app over Bluetooth LE (BLE) GATT
 - Sends and receives newline-delimited JSON messages
 - Keeps the E220 chat/config behavior from the original project
 - Stores configuration in ESP32 Preferences
