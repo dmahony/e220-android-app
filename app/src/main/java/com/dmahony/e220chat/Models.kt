@@ -7,6 +7,11 @@ enum class AppTab(val label: String) {
     DEBUG("Debug")
 }
 
+enum class SlashCommand(val label: String, val description: String) {
+    GPS("/gps", "Get phone GPS location and post to chat"),
+    CLEAR("/clear", "Clear sent and received messages")
+}
+
 data class BluetoothDeviceInfo(
     val name: String,
     val address: String

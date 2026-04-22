@@ -102,6 +102,13 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             isScanning = true
             try {
                 bluetoothDevices = repo.scanBleDevices()
+                if (bluetoothDevices.isEmpty() && repo.selectedDeviceAddress.isNullOrBlank()) {
+                    connectionHint = "Grant Bluetooth permissions to scan for the ESP32"
+                }
+            } catch (e: Exception) {
+                bluetoothDevices = emptyList()
+                connectionState = ConnectionState.ERROR
+                connectionHint = e.message ?: "Bluetooth scan failed"
             } finally {
                 isScanning = false
             }
@@ -210,6 +217,11 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 onError(e.message ?: "Failed to send message")
             }
         }
+    }
+
+    fun clearChatMessages() {
+        chatMessages = emptyList()
+        chatError = null
     }
 
     fun refreshChat() {

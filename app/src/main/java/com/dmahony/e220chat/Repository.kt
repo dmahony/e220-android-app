@@ -1,5 +1,6 @@
 package com.dmahony.e220chat
 
+import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
@@ -13,10 +14,12 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
-import android.os.ParcelUuid
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
+import android.os.ParcelUuid
 import android.util.Log
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -79,7 +82,28 @@ class E220Repository(context: Context) {
 
     fun getTransportLogs(): List<TransportLogEntry> = transportLogs
 
+    private fun hasBluetoothScanPermission(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        else ->
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasBluetoothConnectPermission(): Boolean = when {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+        else ->
+            true
+    }
+
     suspend fun scanBleDevices(scanMillis: Long = 10000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
+        if (!hasBluetoothScanPermission()) {
+            Log.w(tag, "Skipping BLE scan until Bluetooth permissions are granted")
+            cachedDevices = emptyList()
+            return@withContext emptyList()
+        }
+
         val results = linkedMapOf<String, BluetoothDeviceInfo>()
 
         fun isExpectedName(name: String?): Boolean =
@@ -156,6 +180,9 @@ class E220Repository(context: Context) {
 
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
+            if (!hasBluetoothConnectPermission()) {
+                throw ApiException("Grant Bluetooth permissions first")
+            }
             val device = adapter?.getRemoteDevice(address)
                 ?: throw ApiException("Bluetooth LE is not available on this device")
             closeGattLocked()

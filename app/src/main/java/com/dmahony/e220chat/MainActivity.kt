@@ -39,18 +39,26 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.lifecycle.ViewModelProvider
 import com.dmahony.e220chat.ui.theme.E220ChatTheme
 import java.util.Locale
+import kotlinx.coroutines.launch
 
 private fun formatMHz(value: Double): String = String.format(Locale.US, "%.3f", value)
 
@@ -161,6 +169,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun E220ChatRoot(vm: E220ChatViewModel) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var showBluetoothDialog by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
@@ -172,12 +181,22 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
             Toast.makeText(context, "Bluetooth permissions are required for BLE scanning", Toast.LENGTH_LONG).show()
         }
     }
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            scope.launch {
+                sendGpsMessage(context, vm) { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+            }
+        } else {
+            Toast.makeText(context, "Location permission is required for /gps", Toast.LENGTH_LONG).show()
+        }
+    }
     val bluetoothPermissions = remember {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
+                Manifest.permission.BLUETOOTH_CONNECT
             )
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -193,6 +212,21 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
             showBluetoothDialog = true
             vm.refreshBluetoothDevices()
         }
+    }
+    val requestGpsLocation: () -> Unit = {
+        val missingLocationPermission =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
+        if (missingLocationPermission) {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        } else {
+            scope.launch {
+                sendGpsMessage(context, vm) { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+    val clearChatMessages: () -> Unit = {
+        vm.clearChatMessages()
+        Toast.makeText(context, "Chat cleared", Toast.LENGTH_SHORT).show()
     }
 
     Scaffold(containerColor = Color.Transparent) { padding ->
@@ -241,6 +275,8 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     vm = vm,
                     modifier = Modifier.weight(1f),
                     onOpenBluetooth = openBluetoothPicker,
+                    onGpsCommand = requestGpsLocation,
+                    onClearMessages = clearChatMessages,
                     onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                 )
                 AppTab.RADIO -> SettingsScreen(
@@ -289,10 +325,26 @@ private fun ChatScreen(
     vm: E220ChatViewModel,
     modifier: Modifier = Modifier,
     onOpenBluetooth: () -> Unit,
+    onGpsCommand: () -> Unit,
+    onClearMessages: () -> Unit,
     onError: (String) -> Unit
 ) {
     var draft by remember { mutableStateOf("") }
     var composerFocused by remember { mutableStateOf(false) }
+    val slashCommandQuery = remember(draft) { draft }
+    val slashMenuExpanded = slashCommandQuery.startsWith("/")
+    val slashCommands = remember(slashCommandQuery) {
+        val all = SlashCommand.values().toList()
+        if (!slashCommandQuery.startsWith("/") || slashCommandQuery.length <= 1) {
+            all
+        } else {
+            val filtered = all.filter { command ->
+                command.label.startsWith(slashCommandQuery, ignoreCase = true) ||
+                    command.description.contains(slashCommandQuery.drop(1), ignoreCase = true)
+            }
+            if (filtered.isEmpty()) all else filtered
+        }
+    }
     val connected = vm.connectionState == ConnectionState.CONNECTED
     val scroll = rememberScrollState()
 
@@ -351,39 +403,74 @@ private fun ChatScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    enabled = connected,
+                Box(
                     modifier = Modifier
                         .weight(1f)
                         .height(52.dp)
-                        .onFocusChanged { composerFocused = it.isFocused },
-                    placeholder = {
-                        Text(if (connected) "Message" else "Connect BLE to chat")
-                    },
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                    singleLine = true,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
-                        disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.10f),
-                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        focusedLabelColor = MaterialTheme.colorScheme.primary,
-                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                        focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                ) {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { newValue ->
+                            draft = newValue
+                        },
+                        enabled = connected,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .onFocusChanged { composerFocused = it.isFocused },
+                        placeholder = {
+                            Text(if (connected) "Message" else "Connect BLE to chat")
+                        },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
+                            disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.10f),
+                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                            disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            cursorColor = MaterialTheme.colorScheme.primary,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
                     )
-                )
+                    DropdownMenu(
+                        expanded = slashMenuExpanded,
+                        onDismissRequest = { },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        slashCommands.forEach { command ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                        Text(command.label)
+                                        Text(
+                                            command.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    when (command) {
+                                        SlashCommand.GPS -> onGpsCommand()
+                                        SlashCommand.CLEAR -> onClearMessages()
+                                    }
+                                    draft = ""
+                                    composerFocused = false
+                                }
+                            )
+                        }
+                    }
+                }
                 FilledTonalButton(
                     onClick = {
                         if (connected) {
@@ -592,8 +679,47 @@ private fun BluetoothDeviceDialog(
     )
 }
 
+private suspend fun sendGpsMessage(
+    context: android.content.Context,
+    vm: E220ChatViewModel,
+    onError: (String) -> Unit
+) {
+    val location = resolveCurrentLocation(context)
+    if (location == null) {
+        onError("Unable to read GPS location. Turn on location services and try again.")
+        return
+    }
+    vm.sendMessage(buildGpsMessage(location.latitude, location.longitude), onError)
+}
+
 @Composable
 private fun MessageBubble(message: ChatMessage) {
+    val uriHandler = LocalUriHandler.current
+    val links = remember(message.text) { extractClickableMessageLinks(message.text) }
+    val bodyStyle = MaterialTheme.typography.bodyMedium.copy(
+        lineHeight = 20.sp,
+        color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+    )
+    val annotatedText = buildAnnotatedString {
+        append(message.text)
+        links.forEach { link ->
+            addStyle(
+                SpanStyle(
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline
+                ),
+                start = link.start,
+                end = link.end
+            )
+            addStringAnnotation(
+                tag = "URL",
+                annotation = link.url,
+                start = link.start,
+                end = link.end
+            )
+        }
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -632,10 +758,14 @@ private fun MessageBubble(message: ChatMessage) {
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Text(
-                        text = message.text,
-                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                        color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
+                    ClickableText(
+                        text = annotatedText,
+                        style = bodyStyle,
+                        onClick = { offset ->
+                            links.firstOrNull { offset >= it.start && offset < it.end }?.let { link ->
+                                uriHandler.openUri(link.url)
+                            }
+                        }
                     )
                     if (message.sent && message.delivered) {
                         Text(
