@@ -27,8 +27,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.IOException
 import java.util.UUID
 
@@ -248,13 +246,13 @@ class E220Repository(context: Context) {
 
     suspend fun getDiagnostics(): Diagnostics = E220Protocol.parseDiagnosticsResponse(exchange(E220Protocol.buildDiagnosticsRequest()))
     
-    suspend fun getWifiStatus(): JSONObject = E220Protocol.parseWifiResponse(exchange(E220Protocol.buildWifiGetRequest()))
+    suspend fun getWifiStatus(): WifiStatus = E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiGetRequest()))
 
-    suspend fun setWifiEnabled(enabled: Boolean): JSONObject = E220Protocol.parseWifiResponse(
+    suspend fun setWifiEnabled(enabled: Boolean): WifiStatus = E220Protocol.parseWifiStatus(
         exchange(E220Protocol.buildWifiToggleRequest(enabled))
     )
 
-    suspend fun scanWifi(): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun scanWifi(): List<WifiNetwork> = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
             ensureConnectedLocked()
             executeExchangeLocked(E220Protocol.buildWifiScanRequest())
@@ -265,18 +263,7 @@ class E220Repository(context: Context) {
             val operation = getOperation()
             if (operation.type == "wifi_scan") {
                 if (operation.state == "success") {
-                    val networks = E220Protocol.parseWifiScanNetworks(operation)
-                    val jsonNetworks = JSONArray()
-                    networks.forEach { network ->
-                        jsonNetworks.put(
-                            JSONObject()
-                                .put("ssid", network.ssid)
-                                .put("rssi", network.rssi)
-                                .put("encrypted", network.encrypted)
-                                .put("channel", network.channel)
-                        )
-                    }
-                    return@withContext JSONObject().put("networks", jsonNetworks)
+                    return@withContext E220Protocol.parseWifiScanNetworks(operation)
                 }
                 if (operation.state == "error") {
                     throw ApiException(operation.message.ifBlank { "WiFi scan failed" })
@@ -305,7 +292,7 @@ class E220Repository(context: Context) {
         exchange(E220Protocol.buildDebugClearRequest())
     }
 
-    private suspend fun exchange(request: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun exchange(request: String): String = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
             retryTransportFailure(
                 block = {
@@ -322,16 +309,11 @@ class E220Repository(context: Context) {
         }
     }
 
-    private suspend fun executeExchangeLocked(request: JSONObject): JSONObject {
-        val requestText = request.toString()
-        appendTransportLog(TransportDirection.SENT, requestText)
-        val line = writeRequestAndAwaitResponseLocked(requestText)
+    private suspend fun executeExchangeLocked(request: String): String {
+        appendTransportLog(TransportDirection.SENT, request)
+        val line = writeRequestAndAwaitResponseLocked(request)
         appendTransportLog(TransportDirection.RECEIVED, line)
-        return try {
-            E220Protocol.parseEnvelope(line)
-        } catch (e: Exception) {
-            throw ApiException("Invalid response from ESP32: ${e.message ?: line}")
-        }
+        return line
     }
 
     private suspend fun writeRequestAndAwaitResponseLocked(requestText: String): String {

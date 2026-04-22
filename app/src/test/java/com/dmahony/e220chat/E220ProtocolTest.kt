@@ -1,19 +1,27 @@
 package com.dmahony.e220chat
 
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class E220ProtocolTest {
+    private val json = Json { ignoreUnknownKeys = true }
+
     @Test
     fun `build send request nests message under body field`() {
         val request = E220Protocol.buildSendRequest("hello radio")
+        val envelope = json.parseToJsonElement(request).jsonObject
 
-        assertEquals("/api/send", request.getString("path"))
-        assertEquals("POST", request.getString("method"))
-        val body = request.getJSONObject("body")
-        assertEquals("hello radio", body.getString("message"))
+        assertEquals("/api/send", envelope["path"]?.jsonPrimitive?.content)
+        assertEquals("POST", envelope["method"]?.jsonPrimitive?.content)
+        assertEquals("hello radio", envelope["body"]?.jsonObject?.get("message")?.jsonPrimitive?.content)
     }
 
     @Test
@@ -38,21 +46,19 @@ class E220ProtocolTest {
                 saveType = "1"
             )
         )
+        val envelope = json.parseToJsonElement(request).jsonObject
+        val config = envelope["config"]!!.jsonObject
 
-        assertEquals("/api/config", request.getString("path"))
-        assertEquals("POST", request.getString("method"))
-        val config = request.getJSONObject("config")
-        assertEquals(915.125, config.getDouble("freq"), 0.0)
-        assertEquals(30, config.getInt("txpower"))
-        assertEquals("0x0001", config.getString("addr"))
-        assertEquals(1, config.getInt("txmode"))
-        assertEquals(34, config.getInt("crypt_l"))
+        assertEquals(915.125, requireNotNull(config["freq"]?.jsonPrimitive?.doubleOrNull), 0.0)
+        assertEquals(30, config["txpower"]?.jsonPrimitive?.intOrNull)
+        assertEquals("0x0001", config["addr"]?.jsonPrimitive?.content)
+        assertEquals(1, config["txmode"]?.jsonPrimitive?.intOrNull)
+        assertEquals(34, config["crypt_l"]?.jsonPrimitive?.intOrNull)
     }
 
     @Test
     fun `parse chat response reads nested data messages and marks sent ones delivered`() {
-        val response = JSONObject(
-            """
+        val response = """
             {
               "ok": true,
               "path": "/api/chat",
@@ -61,8 +67,7 @@ class E220ProtocolTest {
                 "messages": ["[RX] hello", "[TX] hi back"]
               }
             }
-            """.trimIndent()
-        )
+        """.trimIndent()
 
         val chat = E220Protocol.parseChatResponse(response)
 
@@ -78,8 +83,7 @@ class E220ProtocolTest {
 
     @Test
     fun `parse diagnostics response reads nested firmware fields`() {
-        val response = JSONObject(
-            """
+        val response = """
             {
               "ok": true,
               "path": "/api/diagnostics",
@@ -98,8 +102,7 @@ class E220ProtocolTest {
                 "last_rssi": -72
               }
             }
-            """.trimIndent()
-        )
+        """.trimIndent()
 
         val diagnostics = E220Protocol.parseDiagnosticsResponse(response)
 
@@ -115,8 +118,7 @@ class E220ProtocolTest {
 
     @Test
     fun `parse debug response returns nested log text`() {
-        val response = JSONObject(
-            """
+        val response = """
             {
               "ok": true,
               "path": "/api/debug",
@@ -124,8 +126,7 @@ class E220ProtocolTest {
                 "log": "[TX] hello\\n[RX] hi"
               }
             }
-            """.trimIndent()
-        )
+        """.trimIndent()
 
         assertEquals("[TX] hello\n[RX] hi", E220Protocol.parseDebugLog(response))
     }

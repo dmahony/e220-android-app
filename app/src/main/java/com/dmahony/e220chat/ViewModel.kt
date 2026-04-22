@@ -10,8 +10,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
@@ -404,8 +402,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
         viewModelScope.launch {
             try {
-                val response = repo.setWifiEnabled(enabled)
-                wifiStatus = E220Protocol.parseWifiStatus(response)
+                repo.setWifiEnabled(enabled)
+                wifiStatus = readWifiStatus()
                 wifiNetworks = if (enabled) wifiNetworks else emptyList()
                 wifiError = null
                 syncTransportLogs()
@@ -435,19 +433,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
         viewModelScope.launch {
             try {
-                val response = repo.scanWifi()
-                val networksArray = response.optJSONArray("networks") ?: JSONArray()
-                wifiNetworks = buildList {
-                    for (i in 0 until networksArray.length()) {
-                        val net = networksArray.getJSONObject(i)
-                        add(WifiNetwork(
-                            ssid = net.optString("ssid", "Unknown"),
-                            rssi = net.optInt("rssi", 0),
-                            encrypted = net.optBoolean("encrypted", false),
-                            channel = net.optInt("channel", 0)
-                        ))
-                    }
-                }
+                wifiNetworks = repo.scanWifi()
                 wifiError = null
                 syncTransportLogs()
             } catch (e: Exception) {
@@ -649,7 +635,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun readWifiStatus(): WifiStatus {
-        return E220Protocol.parseWifiStatus(repo.getWifiStatus())
+        return repo.getWifiStatus()
     }
 
     private fun isUnsupportedWifiApiError(e: Exception): Boolean {
