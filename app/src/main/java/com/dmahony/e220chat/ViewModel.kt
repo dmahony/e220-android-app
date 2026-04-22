@@ -54,6 +54,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         private set
     var wifiError by mutableStateOf<String?>(null)
         private set
+    var wifiApiSupported by mutableStateOf(true)
+        private set
 
     var operationStatus by mutableStateOf(OperationStatus())
         private set
@@ -357,31 +359,37 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             wifiError = null
             return
         }
+        if (!wifiApiSupported) {
+            wifiError = "WiFi controls aren't supported by this firmware."
+            return
+        }
         viewModelScope.launch {
             try {
-                val response = repo.getWifiStatus()
-                wifiStatus = WifiStatus(
-                    enabled = response.optInt("enabled", 0) == 1,
-                    mode = response.optString("mode", "AP"),
-                    apSsid = response.optString("ap_ssid", ""),
-                    apPassword = response.optString("ap_password", ""),
-                    staSsid = response.optString("sta_ssid", ""),
-                    staPassword = response.optString("sta_password", ""),
-                    staConnected = response.optBoolean("sta_connected", false),
-                    staIp = response.optString("sta_ip", ""),
-                    apIp = response.optString("ap_ip", "")
-                )
+                wifiStatus = readWifiStatus()
                 wifiError = null
                 syncTransportLogs()
             } catch (e: Exception) {
-                wifiError = e.message ?: "WiFi status refresh failed"
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                } else {
+                    wifiError = e.message ?: "WiFi status refresh failed"
+                }
                 syncTransportLogs()
             }
         }
     }
 
     fun scanWifiNetworks() {
-        if (!repo.isConnected) return
+        if (!repo.isConnected) {
+            wifiError = "Connect to BLE first"
+            return
+        }
+        if (!wifiApiSupported) {
+            wifiError = "WiFi controls aren't supported by this firmware."
+            return
+        }
         viewModelScope.launch {
             try {
                 val response = repo.scanWifi()
@@ -400,46 +408,91 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 wifiError = null
                 syncTransportLogs()
             } catch (e: Exception) {
-                wifiError = e.message ?: "WiFi scan failed"
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                } else {
+                    wifiError = e.message ?: "WiFi scan failed"
+                }
                 syncTransportLogs()
             }
         }
     }
 
     fun connectWifi(ssid: String, password: String, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        if (!wifiApiSupported) {
+            onError("WiFi controls aren't supported by this firmware.")
+            return
+        }
         viewModelScope.launch {
             try {
                 repo.connectWifi(ssid, password)
+                wifiStatus = readWifiStatus()
+                wifiError = null
                 syncTransportLogs()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "WiFi connection failed")
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                    onError("WiFi controls aren't supported by this firmware.")
+                } else {
+                    onError(e.message ?: "WiFi connection failed")
+                }
                 syncTransportLogs()
             }
         }
     }
 
     fun disconnectWifi(onError: (String) -> Unit, onSuccess: () -> Unit) {
+        if (!wifiApiSupported) {
+            onError("WiFi controls aren't supported by this firmware.")
+            return
+        }
         viewModelScope.launch {
             try {
                 repo.disconnectWifi()
+                wifiStatus = readWifiStatus()
+                wifiError = null
                 syncTransportLogs()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "WiFi disconnect failed")
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                    onError("WiFi controls aren't supported by this firmware.")
+                } else {
+                    onError(e.message ?: "WiFi disconnect failed")
+                }
                 syncTransportLogs()
             }
         }
     }
 
     fun setWifiApPassword(password: String, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        if (!wifiApiSupported) {
+            onError("WiFi controls aren't supported by this firmware.")
+            return
+        }
         viewModelScope.launch {
             try {
                 repo.setWifiAp(password)
+                wifiStatus = readWifiStatus()
+                wifiError = null
                 syncTransportLogs()
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.message ?: "WiFi AP update failed")
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                    onError("WiFi controls aren't supported by this firmware.")
+                } else {
+                    onError(e.message ?: "WiFi AP update failed")
+                }
                 syncTransportLogs()
             }
         }
@@ -550,6 +603,28 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 delay(1500)
             }
         }
+    }
+
+    private suspend fun readWifiStatus(): WifiStatus {
+        val response = repo.getWifiStatus()
+        return WifiStatus(
+            enabled = response.optInt("enabled", 0) == 1,
+            mode = response.optString("mode", "AP"),
+            apSsid = response.optString("ap_ssid", ""),
+            apPassword = response.optString("ap_password", ""),
+            staSsid = response.optString("sta_ssid", ""),
+            staPassword = response.optString("sta_password", ""),
+            staConnected = response.optBoolean("sta_connected", false),
+            staIp = response.optString("sta_ip", ""),
+            apIp = response.optString("ap_ip", "")
+        )
+    }
+
+    private fun isUnsupportedWifiApiError(e: Exception): Boolean {
+        val message = e.message.orEmpty()
+        return message.contains("Unknown BLE API request", ignoreCase = true) ||
+            message.contains("/api/wifi", ignoreCase = true) ||
+            message.contains("WiFi controls aren't supported", ignoreCase = true)
     }
 
     private fun syncTransportLogs() {

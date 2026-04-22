@@ -498,3 +498,25 @@ suspend fun <T> retryTransportFailure(
         }
     }
 }
+
+fun readLineWithTimeout(input: java.io.InputStream, timeoutMs: Long): String {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    val output = java.io.ByteArrayOutputStream()
+    while (System.currentTimeMillis() < deadline) {
+        val available = try {
+            input.available()
+        } catch (_: Exception) {
+            0
+        }
+        if (available <= 0) {
+            if (output.size() > 0) break
+            Thread.sleep(1)
+            continue
+        }
+        val byte = input.read()
+        if (byte == -1) break
+        if (byte == '\n'.code) break
+        if (byte != '\r'.code) output.write(byte)
+    }
+    return output.toString(Charsets.UTF_8.name())
+}

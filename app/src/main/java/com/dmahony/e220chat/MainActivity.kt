@@ -12,6 +12,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
@@ -421,6 +422,27 @@ private fun CompactConnectionBanner(
     connected: Boolean,
     onOpenBluetooth: () -> Unit
 ) {
+    val transition = rememberInfiniteTransition(label = "linkGlow")
+    val glowPulse by transition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1200, easing = LinearEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "glowPulse"
+    )
+    val glowColor = if (connected) Color(0xFF2BFF88) else Color(0xFFFF5A5A)
+    val glowText = if (connected) "LINK UP" else "LINK DOWN"
+    val glowStyle = MaterialTheme.typography.labelMedium.copy(
+        color = glowColor,
+        shadow = androidx.compose.ui.graphics.Shadow(
+            color = glowColor.copy(alpha = 0.90f * glowPulse),
+            offset = Offset.Zero,
+            blurRadius = 10f * glowPulse + 2f
+        )
+    )
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -445,10 +467,9 @@ private fun CompactConnectionBanner(
                 )
             ) {
                 Text(
-                    text = if (connected) "LINK UP" else "LINK DOWN",
+                    text = glowText,
                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (connected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+                    style = glowStyle
                 )
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
@@ -587,11 +608,19 @@ private fun MessageBubble(message: ChatMessage) {
                 } else {
                     RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 8.dp, bottomEnd = 14.dp)
                 },
-                color = if (message.sent) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f) else MaterialTheme.colorScheme.surfaceContainerLow,
+                color = if (message.sent) {
+                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.96f)
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 1f)
+                },
                 contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                 border = BorderStroke(
                     1.dp,
-                    if (message.sent) MaterialTheme.colorScheme.primary.copy(alpha = 0.14f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f)
+                    if (message.sent) {
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                    } else {
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+                    }
                 ),
                 tonalElevation = 0.dp,
                 shadowElevation = 0.dp,
@@ -1108,6 +1137,9 @@ private fun WifiScreen(
 ) {
     val context = LocalContext.current
     val scroll = rememberScrollState()
+    var selectedNetwork by remember { mutableStateOf<WifiNetwork?>(null) }
+    var wifiPassword by remember { mutableStateOf("") }
+    val wifiSupported = vm.wifiApiSupported
 
     Column(
         modifier = modifier
@@ -1162,7 +1194,7 @@ private fun WifiScreen(
                         Text("Disconnect")
                     }
                 }
-                
+
                 if (vm.wifiStatus.mode == "AP") {
                     ConfigField(
                         label = "AP Password",
@@ -1185,36 +1217,172 @@ private fun WifiScreen(
             subtitle = "Connect the ESP32 to an existing WiFi network."
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(
-                    onClick = { vm.scanWifiNetworks() },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Scan for Networks")
+                if (!wifiSupported) {
+                    Text(
+                        text = "WiFi controls aren't supported by the current firmware build.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { vm.scanWifiNetworks() },
+                        enabled = wifiSupported,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Scan")
+                    }
+                    Button(
+                        onClick = {
+                            val network = selectedNetwork
+                            if (network != null) {
+                                val connectPassword = if (network.encrypted) wifiPassword else ""
+                                vm.connectWifi(
+                                    ssid = network.ssid,
+                                    password = connectPassword,
+                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                                    onSuccess = {
+                                        selectedNetwork = null
+                                        wifiPassword = ""
+                                        vm.refreshWifi()
+                                        vm.scanWifiNetworks()
+                                    }
+                                )
+                            }
+                        },
+                        enabled = wifiSupported && selectedNetwork != null,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Connect")
+                    }
                 }
 
                 if (vm.wifiNetworks.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         vm.wifiNetworks.forEach { net ->
+                            val savedPasswordAvailable = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staPassword.isNotBlank()
                             OutlinedCard(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
-                                    // For now, just a toast as we need a password input dialog
-                                    Toast.makeText(context, "Connect to ${net.ssid}? (Password input not yet implemented)", Toast.LENGTH_SHORT).show()
+                                    selectedNetwork = net
+                                    wifiPassword = if (savedPasswordAvailable) vm.wifiStatus.staPassword else ""
                                 }
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                Column(
+                                    modifier = Modifier.padding(12.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
-                                    Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
-                                    Text("${net.rssi} dBm", style = MaterialTheme.typography.labelSmall)
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
+                                        Text("${net.rssi} dBm", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                    Text(
+                                        text = "Channel ${net.channel} • ${if (net.encrypted) "Encrypted" else "Open"}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
                             }
                         }
                     }
                 } else if (vm.wifiError == null) {
                     Text("No networks scanned yet.", style = MaterialTheme.typography.bodySmall)
+                }
+
+                selectedNetwork?.let { network ->
+                    val savedPasswordAvailable = vm.wifiStatus.staSsid == network.ssid && vm.wifiStatus.staPassword.isNotBlank()
+                    val canConnect = !network.encrypted || wifiPassword.length >= 8
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("Selected network", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                Text(network.ssid, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    text = "Channel ${network.channel} • ${network.rssi} dBm • ${if (network.encrypted) "Encrypted" else "Open"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (network.encrypted) {
+                                OutlinedTextField(
+                                    value = wifiPassword,
+                                    onValueChange = { wifiPassword = it },
+                                    label = { Text("Password") },
+                                    placeholder = { Text("Enter WiFi password") },
+                                    supportingText = {
+                                        Text(if (savedPasswordAvailable) "Saved password is available for this SSID." else "WPA2 passwords need at least 8 characters.")
+                                    },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(14.dp),
+                                    keyboardOptions = KeyboardOptions(
+                                        keyboardType = KeyboardType.Password,
+                                        imeAction = ImeAction.Done
+                                    ),
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                                        focusedLabelColor = MaterialTheme.colorScheme.primary,
+                                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        cursorColor = MaterialTheme.colorScheme.primary,
+                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = { wifiPassword = vm.wifiStatus.staPassword },
+                                    enabled = savedPasswordAvailable,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Use saved password")
+                                }
+                                Button(
+                                    enabled = canConnect,
+                                    onClick = {
+                                        val connectPassword = if (network.encrypted) wifiPassword else ""
+                                        vm.connectWifi(
+                                            ssid = network.ssid,
+                                            password = connectPassword,
+                                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                                            onSuccess = {
+                                                selectedNetwork = null
+                                                wifiPassword = ""
+                                                vm.refreshWifi()
+                                                vm.scanWifiNetworks()
+                                            }
+                                        )
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Text("Connect")
+                                }
+                            }
+                            TextButton(
+                                onClick = {
+                                    selectedNetwork = null
+                                    wifiPassword = ""
+                                },
+                                modifier = Modifier.align(Alignment.End)
+                            ) {
+                                Text("Clear selection")
+                            }
+                        }
+                    }
                 }
             }
         }
