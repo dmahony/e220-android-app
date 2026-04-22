@@ -867,17 +867,7 @@ int readAmbientNoiseRssi() {
 }
 
 String buildTxHistoryEntry(const String &message) {
-  String entry = "[TX] " + message;
-  if (e220_config.rssi_noise) {
-    int noise = readAmbientNoiseRssi();
-    if (hasAmbientNoiseRssi) {
-      entry += " [NOISE:" + String(noise) + "dBm]";
-    }
-  }
-  if (e220_config.rssi_byte && lastRssi != 0) {
-    entry += " [RSSI:" + String(lastRssi) + "dBm]";
-  }
-  return entry;
+  return "[TX] " + message;
 }
 
 #if 0
@@ -1336,60 +1326,8 @@ static unsigned long lastRxTime = 0;
 // If no new data for this many ms, flush whatever we have as a complete message
 #define RX_FLUSH_TIMEOUT 2000
 
-int readAmbientNoiseRssi() {
-  if (!e220_config.rssi_noise) {
-    hasAmbientNoiseRssi = false;
-    return 0;
-  }
-
-  while (e220Serial.available()) e220Serial.read();
-
-  // Once RSSI ambient noise is enabled, the manual allows runtime register reads in transmit mode.
-  uint8_t readCmd[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x01};
-  e220Serial.write(readCmd, sizeof(readCmd));
-  e220Serial.flush();
-
-  uint32_t timeout = millis() + 250;
-  while (e220Serial.available() < 4 && millis() < timeout) {
-    delay(5);
-  }
-
-  if (e220Serial.available() < 4) {
-    hasAmbientNoiseRssi = false;
-    dbg.println("[RSSI] Ambient noise read timed out");
-    return 0;
-  }
-
-  uint8_t hdr = e220Serial.read();
-  uint8_t start = e220Serial.read();
-  uint8_t len = e220Serial.read();
-  uint8_t raw = e220Serial.read();
-  if (hdr != 0xC1 || start != 0x00 || len != 0x01) {
-    hasAmbientNoiseRssi = false;
-    dbg.printf("[RSSI] Ambient noise read invalid header: %02X %02X %02X\n", hdr, start, len);
-    while (e220Serial.available()) e220Serial.read();
-    return 0;
-  }
-
-  lastAmbientNoiseRssi = -(256 - raw);
-  hasAmbientNoiseRssi = true;
-  dbg.printf("[RSSI] Ambient noise raw=0x%02X -> %d dBm\n", raw, lastAmbientNoiseRssi);
-  while (e220Serial.available()) e220Serial.read();
-  return lastAmbientNoiseRssi;
-}
-
 String buildTxHistoryEntry(const String &message) {
-  String entry = "[TX] " + message;
-  if (e220_config.rssi_noise) {
-    int noise = readAmbientNoiseRssi();
-    if (hasAmbientNoiseRssi) {
-      entry += " [NOISE:" + String(noise) + "dBm]";
-    }
-  }
-  if (e220_config.rssi_byte && lastRssi != 0) {
-    entry += " [RSSI:" + String(lastRssi) + "dBm]";
-  }
-  return entry;
+  return "[TX] " + message;
 }
 
 // Get sub-packet size in bytes from config value
@@ -1650,22 +1588,21 @@ String jsonWrapOkMessage(const String &message) {
 }
 
 String buildBleChatResponse() {
-  String out = "{\"ok\":true,\"data\":{";
-  out += "\"sequence\":" + String(chatSequence) + ",";
-  out += "\"messages\":[";
-  for (size_t i = 0; i < chatHistoryCount; i++) {
-    String msg = getChatHistoryItem(i);
-    // Escape quotes for JSON
-    String escaped = "";
-    for (unsigned int j = 0; j < msg.length(); j++) {
-      if (msg[j] == '\"') escaped += "\\\"";
-      else if (msg[j] == '\\') escaped += "\\\\";
-      else escaped += msg[j];
-    }
-    out += "\"" + escaped + "\"";
-    if (i < chatHistoryCount - 1) out += ",";
+  DynamicJsonDocument doc(16384);
+  doc["ok"] = true;
+  JsonObject data = doc.createNestedObject("data");
+  data["sequence"] = chatSequence;
+  JsonArray messages = data.createNestedArray("messages");
+  // Limit to last 10 messages to avoid BLE buffer overflow
+  size_t start = 0;
+  if (chatHistoryCount > 10) {
+    start = chatHistoryCount - 10;
   }
-  out += "]}";
+  for (size_t i = start; i < chatHistoryCount; i++) {
+    messages.add(getChatHistoryItem(i));
+  }
+  String out;
+  serializeJson(doc, out);
   return out;
 }
 

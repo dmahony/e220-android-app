@@ -455,8 +455,8 @@ class E220Repository(context: Context) {
         private const val KEY_BT_DEVICE_ADDRESS = "bt_device_address"
         private const val KEY_BT_DEVICE_NAME = "bt_device_name"
         private const val MAX_TRANSPORT_LOGS = 200
-        private const val RESPONSE_TIMEOUT_MS = 4000L
-        private const val CONNECT_TIMEOUT_MS = 12000L
+        private const val RESPONSE_TIMEOUT_MS = 10000L
+        private const val CONNECT_TIMEOUT_MS = 20000L
         private const val BLE_NAME_PREFIX = "E220-Chat-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
         private val NUS_RX_UUID: UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
