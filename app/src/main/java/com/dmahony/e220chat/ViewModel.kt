@@ -393,6 +393,37 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun setWifiEnabled(enabled: Boolean, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        if (!repo.isConnected) {
+            onError("Connect to BLE first")
+            return
+        }
+        if (!wifiApiSupported) {
+            onError("WiFi controls aren't supported by this firmware.")
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val response = repo.setWifiEnabled(enabled)
+                wifiStatus = E220Protocol.parseWifiStatus(response)
+                wifiNetworks = if (enabled) wifiNetworks else emptyList()
+                wifiError = null
+                syncTransportLogs()
+                onSuccess()
+            } catch (e: Exception) {
+                if (isUnsupportedWifiApiError(e)) {
+                    wifiApiSupported = false
+                    wifiError = "WiFi controls aren't supported by this firmware."
+                    wifiNetworks = emptyList()
+                    onError("WiFi controls aren't supported by this firmware.")
+                } else {
+                    onError(e.message ?: "WiFi toggle failed")
+                }
+                syncTransportLogs()
+            }
+        }
+    }
+
     fun scanWifiNetworks() {
         if (!repo.isConnected) {
             wifiError = "Connect to BLE first"
@@ -618,18 +649,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun readWifiStatus(): WifiStatus {
-        val response = repo.getWifiStatus()
-        return WifiStatus(
-            enabled = response.optInt("enabled", 0) == 1,
-            mode = response.optString("mode", "AP"),
-            apSsid = response.optString("ap_ssid", ""),
-            apPassword = response.optString("ap_password", ""),
-            staSsid = response.optString("sta_ssid", ""),
-            staPassword = response.optString("sta_password", ""),
-            staConnected = response.optBoolean("sta_connected", false),
-            staIp = response.optString("sta_ip", ""),
-            apIp = response.optString("ap_ip", "")
-        )
+        return E220Protocol.parseWifiStatus(repo.getWifiStatus())
     }
 
     private fun isUnsupportedWifiApiError(e: Exception): Boolean {

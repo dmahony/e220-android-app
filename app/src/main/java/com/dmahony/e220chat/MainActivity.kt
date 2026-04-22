@@ -196,7 +196,8 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             arrayOf(
                 Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT
+                Manifest.permission.BLUETOOTH_CONNECT,
+                Manifest.permission.ACCESS_FINE_LOCATION
             )
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
@@ -1284,7 +1285,37 @@ private fun WifiScreen(
             title = "WiFi Status",
             subtitle = "Current connectivity and IP address."
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("WiFi enabled", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = if (vm.wifiStatus.enabled) "ESP32 WiFi is on" else "ESP32 WiFi is off",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = vm.wifiStatus.enabled,
+                        enabled = wifiSupported,
+                        onCheckedChange = { enabled ->
+                            vm.setWifiEnabled(
+                                enabled = enabled,
+                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                                onSuccess = {
+                                    if (!enabled) {
+                                        selectedNetwork = null
+                                        wifiPassword = ""
+                                    }
+                                }
+                            )
+                        }
+                    )
+                }
                 Text("Enabled: ${if (vm.wifiStatus.enabled) "Yes" else "No"}", style = MaterialTheme.typography.bodyMedium)
                 Text("Mode: ${vm.wifiStatus.mode}", style = MaterialTheme.typography.bodyMedium)
                 if (vm.wifiStatus.mode == "AP") {
@@ -1357,7 +1388,7 @@ private fun WifiScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { vm.scanWifiNetworks() },
-                        enabled = wifiSupported,
+                        enabled = wifiSupported && vm.wifiStatus.enabled,
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null)
@@ -1382,14 +1413,14 @@ private fun WifiScreen(
                                 )
                             }
                         },
-                        enabled = wifiSupported && selectedNetwork != null,
+                        enabled = wifiSupported && vm.wifiStatus.enabled && selectedNetwork != null,
                         modifier = Modifier.weight(1f)
                     ) {
                         Text("Connect")
                     }
                 }
 
-                if (vm.wifiNetworks.isNotEmpty()) {
+                if (vm.wifiStatus.enabled && vm.wifiNetworks.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         vm.wifiNetworks.forEach { net ->
                             val savedPasswordAvailable = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staPassword.isNotBlank()
@@ -1421,8 +1452,10 @@ private fun WifiScreen(
                             }
                         }
                     }
-                } else if (vm.wifiError == null) {
+                } else if (vm.wifiError == null && vm.wifiStatus.enabled) {
                     Text("No networks scanned yet.", style = MaterialTheme.typography.bodySmall)
+                } else if (!vm.wifiStatus.enabled) {
+                    Text("Turn WiFi on to scan for networks or connect to one.", style = MaterialTheme.typography.bodySmall)
                 }
 
                 selectedNetwork?.let { network ->

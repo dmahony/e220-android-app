@@ -45,8 +45,13 @@ object E220Protocol {
 
     // WiFi API functions
     fun buildWifiGetRequest(): JSONObject = JSONObject()
-        .put("path", "/api/wifi")
+        .put("path", "/api/wifi/status")
         .put("method", "GET")
+
+    fun buildWifiToggleRequest(enabled: Boolean): JSONObject = JSONObject()
+        .put("path", "/api/wifi/toggle")
+        .put("method", "POST")
+        .put("body", JSONObject().put("enabled", enabled))
 
     fun buildWifiScanRequest(): JSONObject = JSONObject()
         .put("path", "/api/wifi/scan")
@@ -161,11 +166,72 @@ object E220Protocol {
         return requireData(response)
     }
 
+    fun parseWifiStatus(response: JSONObject): WifiStatus {
+        val data = requireData(response)
+        return WifiStatus(
+            enabled = data.optFlexibleBoolean("enabled"),
+            mode = data.optString("mode", "AP"),
+            apSsid = data.optString("ap_ssid", ""),
+            apPassword = data.optString("ap_password", ""),
+            staSsid = data.optString("sta_ssid", ""),
+            staPassword = data.optString("sta_password", ""),
+            staConnected = data.optFlexibleBoolean("sta_connected"),
+            staIp = data.optString("sta_ip", ""),
+            apIp = data.optString("ap_ip", "")
+        )
+    }
+
+    fun parseWifiScanNetworks(operation: OperationStatus): List<WifiNetwork> {
+        if (operation.type != "wifi_scan") return emptyList()
+        if (operation.state != "success") {
+            throw ApiException(operation.message.ifBlank { "WiFi scan failed" })
+        }
+
+        val raw = operation.rawResult.trim()
+        if (raw.isBlank()) return emptyList()
+
+        val result = JSONObject(raw)
+        val networks = result.optJSONArray("networks") ?: JSONArray()
+        return buildList {
+            for (i in 0 until networks.length()) {
+                val net = networks.optJSONObject(i) ?: continue
+                val encryption = net.optString("encryption", "").trim()
+                val encrypted = when {
+                    net.has("encrypted") -> net.optBoolean("encrypted", false)
+                    encryption.isNotBlank() -> !encryption.equals("open", ignoreCase = true)
+                    else -> false
+                }
+                add(
+                    WifiNetwork(
+                        ssid = net.optString("ssid", "Unknown"),
+                        rssi = net.optInt("rssi", 0),
+                        encrypted = encrypted,
+                        channel = net.optInt("channel", 0)
+                    )
+                )
+            }
+        }
+    }
+
     private fun requireData(response: JSONObject): JSONObject {
         if (!response.optBoolean("ok", false)) {
             throw ApiException(response.optString("error", "Request failed"))
         }
         return response.optJSONObject("data") ?: JSONObject()
+    }
+
+    private fun JSONObject.optFlexibleBoolean(name: String): Boolean {
+        if (!has(name) || isNull(name)) return false
+        return try {
+            when (val value = get(name)) {
+                is Boolean -> value
+                is Number -> value.toInt() != 0
+                is String -> value.equals("true", ignoreCase = true) || value.toIntOrNull() != null && value.toInt() != 0
+                else -> optBoolean(name, false)
+            }
+        } catch (_: Exception) {
+            optBoolean(name, false)
+        }
     }
 
     private fun E220Config.toJson(): JSONObject = JSONObject()

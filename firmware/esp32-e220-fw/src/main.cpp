@@ -793,7 +793,52 @@ void setupWiFi() {
   strlcpy(wifi_config.ap_ssid, apSSID.c_str(), sizeof(wifi_config.ap_ssid));
   strlcpy(wifi_config.ap_password, apPass.c_str(), sizeof(wifi_config.ap_password));
 
-  // Start AP+STA mode
+  bool wifiEnabled = preferences.isKey("wifi_enabled") ? preferences.getBool("wifi_enabled", true) : true;
+  if (wifiEnabled) {
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(wifi_config.ap_ssid, wifi_config.ap_password);
+    dbg.print("[WiFi] AP SSID: ");
+    dbg.println(wifi_config.ap_ssid);
+    dbg.print("[WiFi] AP password: ");
+    dbg.println(wifi_config.ap_password);
+    dbg.print("[WiFi] AP IP: ");
+    dbg.println(WiFi.softAPIP());
+
+    // If saved STA credentials exist, attempt connection
+    if (strlen(wifi_config.ssid) > 0) {
+      dbg.printf("[WiFi] Connecting to '%s'...\n", wifi_config.ssid);
+      WiFi.begin(wifi_config.ssid, wifi_config.password);
+      unsigned long start = millis();
+      while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+        delay(250);
+        dbg.print(".");
+      }
+      dbg.println();
+      if (WiFi.status() == WL_CONNECTED) {
+        dbg.print("[WiFi] STA connected, IP: ");
+        dbg.println(WiFi.localIP());
+      } else {
+        dbg.println("[WiFi] STA connection failed, staying in AP+STA mode for scanning");
+      }
+    } else {
+      dbg.println("[WiFi] No saved STA credentials, AP+STA mode for scanning");
+    }
+  } else {
+    WiFi.mode(WIFI_OFF);
+    dbg.println("[WiFi] Disabled at boot by saved preference");
+  }
+}
+
+void setWifiEnabled(bool enabled) {
+  preferences.putBool("wifi_enabled", enabled);
+  if (!enabled) {
+    WiFi.disconnect(true);
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    dbg.println("[WiFi] Disabled via API");
+    return;
+  }
+
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAP(wifi_config.ap_ssid, wifi_config.ap_password);
   dbg.print("[WiFi] AP SSID: ");
@@ -803,22 +848,9 @@ void setupWiFi() {
   dbg.print("[WiFi] AP IP: ");
   dbg.println(WiFi.softAPIP());
 
-  // If saved STA credentials exist, attempt connection
   if (strlen(wifi_config.ssid) > 0) {
     dbg.printf("[WiFi] Connecting to '%s'...\n", wifi_config.ssid);
     WiFi.begin(wifi_config.ssid, wifi_config.password);
-    unsigned long start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
-      delay(250);
-      dbg.print(".");
-    }
-    dbg.println();
-    if (WiFi.status() == WL_CONNECTED) {
-      dbg.print("[WiFi] STA connected, IP: ");
-      dbg.println(WiFi.localIP());
-    } else {
-      dbg.println("[WiFi] STA connection failed, staying in AP+STA mode for scanning");
-    }
   } else {
     dbg.println("[WiFi] No saved STA credentials, AP+STA mode for scanning");
   }
@@ -1196,20 +1228,20 @@ void setupWebRoutes() {
 
   // WiFi status API
   server.on("/api/wifi/status", HTTP_GET, [](AsyncWebServerRequest *request) {
-    DynamicJsonDocument doc(512);
-    wifi_mode_t mode = WiFi.getMode();
-    doc["mode"] = (mode == WIFI_AP) ? "AP" : (mode == WIFI_STA) ? "STA" : "AP_STA";
-    doc["ap_ssid"] = String(wifi_config.ap_ssid);
-    doc["ap_ip"] = WiFi.softAPIP().toString();
-    doc["sta_connected"] = (WiFi.status() == WL_CONNECTED);
-    if (WiFi.status() == WL_CONNECTED) {
-      doc["sta_ssid"] = WiFi.SSID();
-      doc["sta_ip"] = WiFi.localIP().toString();
-      doc["sta_rssi"] = WiFi.RSSI();
+    request->send(200, "application/json", buildWifiStatusJson());
+  });
+
+  server.on("/api/wifi/toggle", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
+  [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+    if (!requireAdmin(request)) return;
+    DynamicJsonDocument doc(128);
+    if (deserializeJson(doc, (const char*)data, len)) {
+      request->send(400, "application/json", "{\"error\":\"JSON parse error\"}");
+      return;
     }
-    String response;
-    serializeJson(doc, response);
-    request->send(200, "application/json", response);
+    bool enabled = doc["enabled"] | false;
+    setWifiEnabled(enabled);
+    request->send(200, "application/json", buildWifiStatusJson());
   });
 
   // WiFi scan API - scan for available networks
@@ -1675,6 +1707,42 @@ String buildBleDiagnosticsResponse() {
   return out;
 }
 
+void fillWifiStatusJson(JsonObject data) {
+  wifi_mode_t mode = WiFi.getMode();
+  bool enabled = mode != WIFI_OFF;
+  data["enabled"] = enabled;
+  data["mode"] = (mode == WIFI_AP) ? "AP" : (mode == WIFI_STA) ? "STA" : (mode == WIFI_AP_STA) ? "AP_STA" : "OFF";
+  data["ap_ssid"] = String(wifi_config.ap_ssid);
+  data["ap_password"] = String(wifi_config.ap_password);
+  data["ap_ip"] = WiFi.softAPIP().toString();
+  data["sta_ssid"] = String(wifi_config.ssid);
+  data["sta_password"] = String(wifi_config.password);
+  data["sta_connected"] = (WiFi.status() == WL_CONNECTED);
+  if (WiFi.status() == WL_CONNECTED) {
+    data["sta_ip"] = WiFi.localIP().toString();
+  } else {
+    data["sta_ip"] = "";
+  }
+}
+
+String buildWifiStatusJson() {
+  DynamicJsonDocument doc(768);
+  fillWifiStatusJson(doc.to<JsonObject>());
+  String response;
+  serializeJson(doc, response);
+  return response;
+}
+
+String buildBleWifiStatusResponse() {
+  DynamicJsonDocument doc(896);
+  doc["ok"] = true;
+  JsonObject data = doc.createNestedObject("data");
+  fillWifiStatusJson(data);
+  String response;
+  serializeJson(doc, response);
+  return response;
+}
+
 String buildBleRebootResponse() {
   DynamicJsonDocument doc(256);
   doc["ok"] = true;
@@ -1807,6 +1875,75 @@ String handleBleApiRequest(const String &line) {
       return response;
     }
     return response;
+  }
+  if (strcmp(path, "/api/wifi/status") == 0 && strcmp(method, "GET") == 0) {
+    return buildBleWifiStatusResponse();
+  }
+  if (strcmp(path, "/api/wifi/toggle") == 0 && strcmp(method, "POST") == 0) {
+    bool enabled = false;
+    if (req.containsKey("body")) {
+      JsonObject body = req["body"].as<JsonObject>();
+      enabled = body["enabled"] | false;
+    } else {
+      enabled = req["enabled"] | false;
+    }
+    setWifiEnabled(enabled);
+    return buildBleWifiStatusResponse();
+  }
+  if (strcmp(path, "/api/wifi/scan") == 0 && strcmp(method, "GET") == 0) {
+    if (!queueOperation(OP_WIFI_SCAN, "Scanning WiFi networks")) {
+      return buildBleError("Another operation is already running");
+    }
+    dbg.println("[BLE] WiFi scan queued");
+    return jsonWrapOkMessage("WiFi scan queued");
+  }
+  if (strcmp(path, "/api/wifi/connect") == 0 && strcmp(method, "POST") == 0) {
+    String ssid;
+    String pass;
+    if (req.containsKey("body")) {
+      JsonObject body = req["body"].as<JsonObject>();
+      ssid = body["ssid"] | "";
+      pass = body["password"] | "";
+    } else {
+      ssid = req["ssid"] | "";
+      pass = req["password"] | "";
+    }
+    ssid.trim();
+    if (ssid.length() == 0) return buildBleError("SSID required");
+    if (!queueOperation(OP_WIFI_CONNECT, "Connecting to WiFi")) {
+      return buildBleError("Another operation is already running");
+    }
+    strlcpy(operationState.wifi_ssid, ssid.c_str(), sizeof(operationState.wifi_ssid));
+    strlcpy(operationState.wifi_password, pass.c_str(), sizeof(operationState.wifi_password));
+    dbg.printf("[BLE] WiFi connect queued for %s\n", ssid.c_str());
+    return jsonWrapOkMessage("WiFi connect queued");
+  }
+  if (strcmp(path, "/api/wifi/disconnect") == 0 && strcmp(method, "POST") == 0) {
+    WiFi.disconnect(true);
+    preferences.remove("sta_ssid");
+    preferences.remove("sta_pass");
+    wifi_config.ssid[0] = '\0';
+    wifi_config.password[0] = '\0';
+    dbg.println("[BLE] Disconnected STA, cleared credentials, staying in AP+STA mode");
+    return jsonWrapOkMessage("WiFi disconnected");
+  }
+  if (strcmp(path, "/api/wifi/ap") == 0 && strcmp(method, "POST") == 0) {
+    String pass;
+    if (req.containsKey("body")) {
+      JsonObject body = req["body"].as<JsonObject>();
+      pass = body["password"] | "";
+    } else {
+      pass = req["password"] | "";
+    }
+    pass.trim();
+    if (pass.length() == 0) return buildBleError("Password required");
+    if (pass.length() < 8) return buildBleError("Password too short (min 8 chars)");
+    if (pass.length() > 63) return buildBleError("Password too long (max 63 chars)");
+    preferences.putString("ap_pass", pass);
+    strlcpy(wifi_config.ap_password, pass.c_str(), sizeof(wifi_config.ap_password));
+    resetAdminSession();
+    dbg.println("[BLE] AP password updated");
+    return jsonWrapOkMessage("Reboot to apply new AP settings");
   }
   if (strcmp(path, "/api/operation") == 0 && strcmp(method, "GET") == 0) {
     return buildBleOperationResponse();

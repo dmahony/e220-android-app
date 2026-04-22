@@ -27,6 +27,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.UUID
@@ -85,7 +86,8 @@ class E220Repository(context: Context) {
     private fun hasBluetoothScanPermission(): Boolean = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         else ->
             ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
     }
@@ -104,15 +106,28 @@ class E220Repository(context: Context) {
             return@withContext emptyList()
         }
 
-        val results = linkedMapOf<String, BluetoothDeviceInfo>()
+        val expectedResults = linkedMapOf<String, BluetoothDeviceInfo>()
+        val fallbackResults = linkedMapOf<String, BluetoothDeviceInfo>()
 
         fun isExpectedName(name: String?): Boolean =
-            name != null && (name.startsWith(BLE_NAME_PREFIX, ignoreCase = true) || name.contains("E220", ignoreCase = true))
+            name != null && (
+                name.startsWith(BLE_NAME_PREFIX, ignoreCase = true) ||
+                    name.contains("E220", ignoreCase = true) ||
+                    name.contains("ESP32", ignoreCase = true)
+                )
+
+        fun putDevice(target: MutableMap<String, BluetoothDeviceInfo>, address: String, name: String?) {
+            target[address] = BluetoothDeviceInfo(name = name?.takeIf { it.isNotBlank() } ?: address, address = address)
+        }
 
         fun addBondedDevice(device: BluetoothDevice) {
             val name = device.name
-            if (!isExpectedName(name) && device.address != selectedDeviceAddress) return
-            results[device.address] = BluetoothDeviceInfo(name = name ?: device.address, address = device.address)
+            if (name == null) return
+            if (isExpectedName(name) || device.address == selectedDeviceAddress) {
+                putDevice(expectedResults, device.address, name)
+            } else {
+                putDevice(fallbackResults, device.address, name)
+            }
         }
 
         fun addScanResult(result: ScanResult) {
@@ -125,12 +140,15 @@ class E220Repository(context: Context) {
                 tag,
                 "BLE scan found: addr=${device.address} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
             )
-            if (!hasExpectedName && !hasExpectedService && !isSelectedDevice) {
-                Log.d(tag, "BLE scan filtered out: ${device.address}")
-                return
+            if (hasExpectedName || hasExpectedService || isSelectedDevice) {
+                putDevice(expectedResults, device.address, advertisedName)
+                Log.d(tag, "BLE scan added expected device: ${device.address} (${advertisedName ?: "unnamed"}) total=${expectedResults.size}")
+            } else if (!advertisedName.isNullOrBlank()) {
+                putDevice(fallbackResults, device.address, advertisedName)
+                Log.d(tag, "BLE scan added fallback device: ${device.address} (${advertisedName}) total=${fallbackResults.size}")
+            } else {
+                Log.d(tag, "BLE scan ignored unnamed device: ${device.address}")
             }
-            results[device.address] = BluetoothDeviceInfo(name = advertisedName ?: device.address, address = device.address)
-            Log.d(tag, "BLE scan added: ${device.address} (${advertisedName ?: "unnamed"}) total=${results.size}")
         }
 
         adapter?.bondedDevices?.forEach { bonded ->
@@ -153,16 +171,11 @@ class E220Repository(context: Context) {
                 }
             }
 
-            val filters = listOf(
-                ScanFilter.Builder()
-                    .setServiceUuid(ParcelUuid(NUS_SERVICE_UUID))
-                    .build()
-            )
             val settings = ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
-            scanner.startScan(filters, settings, scanCallback)
+            scanner.startScan(emptyList(), settings, scanCallback)
             try {
                 delay(scanMillis)
             } finally {
@@ -173,7 +186,8 @@ class E220Repository(context: Context) {
             }
         }
 
-        val discovered = results.values.sortedWith(compareBy<BluetoothDeviceInfo> { it.name.lowercase() }.thenBy { it.address })
+        val chosen = if (expectedResults.isNotEmpty()) expectedResults else fallbackResults
+        val discovered = chosen.values.sortedWith(compareBy<BluetoothDeviceInfo> { it.name.lowercase() }.thenBy { it.address })
         cachedDevices = discovered
         discovered
     }
@@ -236,7 +250,42 @@ class E220Repository(context: Context) {
     
     suspend fun getWifiStatus(): JSONObject = E220Protocol.parseWifiResponse(exchange(E220Protocol.buildWifiGetRequest()))
 
-    suspend fun scanWifi(): JSONObject = E220Protocol.parseWifiResponse(exchange(E220Protocol.buildWifiScanRequest()))
+    suspend fun setWifiEnabled(enabled: Boolean): JSONObject = E220Protocol.parseWifiResponse(
+        exchange(E220Protocol.buildWifiToggleRequest(enabled))
+    )
+
+    suspend fun scanWifi(): JSONObject = withContext(Dispatchers.IO) {
+        exchangeMutex.withLock {
+            ensureConnectedLocked()
+            executeExchangeLocked(E220Protocol.buildWifiScanRequest())
+        }
+
+        val deadlineMs = System.currentTimeMillis() + WIFI_SCAN_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadlineMs) {
+            val operation = getOperation()
+            if (operation.type == "wifi_scan") {
+                if (operation.state == "success") {
+                    val networks = E220Protocol.parseWifiScanNetworks(operation)
+                    val jsonNetworks = JSONArray()
+                    networks.forEach { network ->
+                        jsonNetworks.put(
+                            JSONObject()
+                                .put("ssid", network.ssid)
+                                .put("rssi", network.rssi)
+                                .put("encrypted", network.encrypted)
+                                .put("channel", network.channel)
+                        )
+                    }
+                    return@withContext JSONObject().put("networks", jsonNetworks)
+                }
+                if (operation.state == "error") {
+                    throw ApiException(operation.message.ifBlank { "WiFi scan failed" })
+                }
+            }
+            delay(300)
+        }
+        throw ApiException("Timed out waiting for WiFi scan result")
+    }
 
     suspend fun connectWifi(ssid: String, password: String) {
         exchange(E220Protocol.buildWifiConnectRequest(ssid, password))
@@ -499,6 +548,7 @@ class E220Repository(context: Context) {
         private const val KEY_BT_DEVICE_NAME = "bt_device_name"
         private const val MAX_TRANSPORT_LOGS = 200
         private const val RESPONSE_TIMEOUT_MS = 10000L
+        private const val WIFI_SCAN_TIMEOUT_MS = 15000L
         private const val CONNECT_TIMEOUT_MS = 20000L
         private const val BLE_NAME_PREFIX = "E220-Chat-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
