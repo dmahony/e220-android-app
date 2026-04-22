@@ -24,7 +24,7 @@ data class ChatSnapshot(
 
 data class E220Config(
     val freq: String = "868.125",
-    val txpower: String = "22",
+    val txpower: String = "21",
     val baud: String = "9600",
     val addr: String = "0x0000",
     val dest: String = "0xFFFF",

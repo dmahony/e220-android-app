@@ -1349,86 +1349,71 @@ void processRxPacket() {
   if (rxLen == 0) return;
   
   int rssiRaw = -1;
+  String msg = "";
   
   if (e220_config.rssi_byte) {
-    // Strip RSSI bytes embedded at every sub-packet boundary
     int subPktSize = getSubPacketSize();
-    static uint8_t cleaned[2048];
-    int cleanLen = 0;
-    int dataCount = 0;  // bytes of actual data seen since last RSSI strip
+    int dataCount = 0;
     
-    dbg.printf("[RSSI] Stripping from %d raw bytes (subpkt=%d)\n", rxLen, subPktSize);
+    dbg.printf("[RSSI] Stripping from %d raw bytes (subpkt=%d)\\n", rxLen, subPktSize);
     
     for (int i = 0; i < rxLen; i++) {
+      uint8_t b = rxBuf[i];
       dataCount++;
+      
       if (dataCount == subPktSize + 1) {
-        // This byte is an RSSI byte (appended after subPktSize data bytes)
-        rssiRaw = rxBuf[i];
+        // This byte is a mandatory RSSI byte after a full sub-packet
+        rssiRaw = b;
         lastRssi = -(256 - rssiRaw);
-        dbg.printf("[RSSI] stripped at pos %d: raw=0x%02X -> %d dBm\n", i, rssiRaw, lastRssi);
-        dataCount = 0;  // reset counter for next sub-packet
+        dataCount = 0;
       } else {
-        if (cleanLen < (int)sizeof(cleaned)) {
-          cleaned[cleanLen++] = rxBuf[i];
+        // This is data. Filter for printable ASCII.
+        if ((b >= 0x20 && b <= 0x7E) || b == '\\t') {
+          msg += (char)b;
         }
       }
     }
     
-    // Check if the very last byte is a trailing RSSI (partial sub-packet)
-    // If we have remaining data and the last byte looks like RSSI
-    if (dataCount > 1) {
-      // Last sub-packet was partial; last byte is RSSI
-      rssiRaw = cleaned[cleanLen - 1];
-      cleanLen--;
+    // After the loop, if we have a trailing byte and it wasn't already stripped
+    // as a full sub-packet RSSI, the last byte is the final RSSI.
+    if (dataCount > 0) {
+      // The last byte seen was the RSSI byte for the partial final sub-packet
+      uint8_t lastByte = rxBuf[rxLen - 1];
+      
+      // Only treat as RSSI if we actually have some data before it, 
+      // or if it's the only byte (meaning the msg was empty)
+      rssiRaw = lastByte;
       lastRssi = -(256 - rssiRaw);
-      dbg.printf("[RSSI] trailing: raw=0x%02X -> %d dBm\n", rssiRaw, lastRssi);
-    } else if (dataCount == 1 && cleanLen > 0) {
-      // The last byte we added was actually an orphan RSSI
-      rssiRaw = cleaned[cleanLen - 1];
-      cleanLen--;
-      lastRssi = -(256 - rssiRaw);
-      dbg.printf("[RSSI] final: raw=0x%02X -> %d dBm\n", rssiRaw, lastRssi);
-    }
-    
-    // Build message from cleaned buffer
-    String msg;
-    msg.reserve(cleanLen + 1);
-    for (int i = 0; i < cleanLen; i++) {
-      uint8_t b = cleaned[i];
-      if ((b >= 0x20 && b <= 0x7E) || b == '\t') {
-        msg += (char)b;
+      
+      // Remove the last character from msg if it was added as data
+      uint8_t b = lastByte;
+      if ((b >= 0x20 && b <= 0x7E) || b == '\\t') {
+        if (msg.length() > 0) {
+          msg.remove(msg.length() - 1);
+        }
       }
-    }
-    msg.trim();
-    
-    if (msg.length() > 0) {
-      String display;
-      display.reserve(msg.length() + 40);
-      display = "[RX] " + msg;
-      if (rssiRaw >= 0) {
-        display += " [RSSI:" + String(lastRssi) + "dBm]";
-      }
-      addChatHistory(display);
-      dbg.printf("[RX] (%d bytes)", msg.length());
-      if (rssiRaw >= 0) dbg.printf(" [RSSI:%d dBm]", lastRssi);
-      dbg.println();
     }
   } else {
     // No RSSI stripping needed
-    String msg;
-    msg.reserve(rxLen + 1);
     for (int i = 0; i < rxLen; i++) {
       uint8_t b = rxBuf[i];
-      if ((b >= 0x20 && b <= 0x7E) || b == '\t') {
+      if ((b >= 0x20 && b <= 0x7E) || b == '\\t') {
         msg += (char)b;
       }
     }
-    msg.trim();
-    
-    if (msg.length() > 0) {
-      addChatHistory("[RX] " + msg);
-      dbg.printf("[RX] (%d bytes)\n", msg.length());
+  }
+  
+  msg.trim();
+  
+  if (msg.length() > 0 || rssiRaw >= 0) {
+    String display = "[RX] " + msg;
+    if (rssiRaw >= 0) {
+      display += " [RSSI:" + String(lastRssi) + "dBm]";
     }
+    addChatHistory(display);
+    dbg.printf("[RX] (%d bytes)", msg.length());
+    if (rssiRaw >= 0) dbg.printf(" [RSSI:%d dBm]", lastRssi);
+    dbg.println();
   }
   
   rxLen = 0;

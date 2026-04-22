@@ -13,6 +13,8 @@ import kotlinx.coroutines.launch
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
+    private var rebootReconnectJob: Job? = null
+    private var rebootInProgress = false
 
     var selectedTab by mutableStateOf(AppTab.CHAT)
         private set
@@ -49,6 +51,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     var bluetoothDevices by mutableStateOf(listOf<BluetoothDeviceInfo>())
         private set
+    var isScanning by mutableStateOf(false)
+        private set
     var selectedBluetoothAddress by mutableStateOf(repo.selectedDeviceAddress.orEmpty())
         private set
     var selectedBluetoothName by mutableStateOf(repo.selectedDeviceName.orEmpty())
@@ -84,7 +88,12 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     fun refreshBluetoothDevices() {
         viewModelScope.launch {
-            bluetoothDevices = repo.scanBleDevices()
+            isScanning = true
+            try {
+                bluetoothDevices = repo.scanBleDevices()
+            } finally {
+                isScanning = false
+            }
             selectedBluetoothAddress = repo.selectedDeviceAddress.orEmpty()
             selectedBluetoothName = repo.selectedDeviceName.orEmpty()
             if (selectedBluetoothName.isBlank() && selectedBluetoothAddress.isNotBlank()) {
@@ -106,12 +115,19 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             try {
                 connectionState = ConnectionState.CONNECTING
-                connectionHint = "Connecting to ${device.name}..."
+                connectionHint = if (rebootInProgress) {
+                    "ESP32 is coming back up, reconnecting to ${device.name}..."
+                } else {
+                    "Connecting to ${device.name}..."
+                }
                 val connected = repo.connect(device.address)
                 selectedBluetoothAddress = connected.address
                 selectedBluetoothName = connected.name
                 connectionState = ConnectionState.CONNECTED
+                rebootInProgress = false
+                rebootReconnectJob?.cancel()
                 connectionHint = "Connected to ${connected.name}"
+                configStatus = null
                 clearConnectionErrors()
                 refreshConfig()
                 refreshDiagnostics()
@@ -119,10 +135,14 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 onSuccess()
             } catch (e: Exception) {
                 connectionState = ConnectionState.ERROR
-                val msg = e.message ?: "Bluetooth connection failed"
+                val msg = if (rebootInProgress) {
+                    "ESP32 is rebooting. Waiting to reconnect..."
+                } else {
+                    e.message ?: "Bluetooth connection failed"
+                }
                 connectionHint = msg
                 syncTransportLogs()
-                onError(msg)
+                if (!rebootInProgress) onError(msg)
             }
         }
     }
@@ -143,6 +163,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 repo.disconnect()
             } catch (_: Exception) {
             }
+            rebootInProgress = false
+            rebootReconnectJob?.cancel()
             connectionState = ConnectionState.DISCONNECTED
             connectionHint = "Bluetooth disconnected"
             syncTransportLogs()
@@ -194,7 +216,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 chatError = null
                 syncTransportLogs()
             } catch (e: Exception) {
-                chatError = e.message ?: "Chat refresh failed"
+                if (!rebootInProgress) {
+                    chatError = e.message ?: "Chat refresh failed"
+                }
                 syncTransportLogs()
             }
         }
@@ -211,7 +235,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 configError = null
                 syncTransportLogs()
             } catch (e: Exception) {
-                configError = e.message ?: "Config load failed"
+                if (!rebootInProgress) {
+                    configError = e.message ?: "Config load failed"
+                }
                 syncTransportLogs()
             }
         }
@@ -275,12 +301,23 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     onError("Connect to BLE first")
                     return@launch
                 }
-                repo.reboot()
-                configStatus = "ESP32 reboot requested"
-                operationStatus = OperationStatus(type = "reboot", state = "success", message = "Reboot requested")
+                rebootInProgress = true
+                rebootReconnectJob?.cancel()
+                configError = null
+                chatError = null
+                diagnosticsError = null
+                configStatus = "ESP32 rebooting. Bluetooth will disconnect briefly and reconnect automatically."
+                connectionHint = "ESP32 is rebooting... waiting for it to come back up"
+                operationStatus = OperationStatus(type = "reboot", state = "running", message = "ESP32 rebooting")
                 syncTransportLogs()
+                try {
+                    repo.reboot()
+                } catch (_: Exception) {
+                }
+                scheduleReconnectAfterReboot()
                 onSuccess()
             } catch (e: Exception) {
+                rebootInProgress = false
                 syncTransportLogs()
                 onError(e.message ?: "Failed to reboot")
             }
@@ -298,7 +335,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 diagnosticsError = null
                 syncTransportLogs()
             } catch (e: Exception) {
-                diagnosticsError = e.message ?: "Diagnostics failed"
+                if (!rebootInProgress) {
+                    diagnosticsError = e.message ?: "Diagnostics failed"
+                }
                 syncTransportLogs()
             }
         }
@@ -333,7 +372,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 operationStatus = repo.getOperation()
                 syncTransportLogs()
             } catch (_: Exception) {
-                syncTransportLogs()
+                if (!rebootInProgress) {
+                    syncTransportLogs()
+                }
             }
         }
     }
@@ -344,6 +385,49 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         refreshConfig()
         refreshDiagnostics()
         refreshDebug()
+    }
+
+    private fun scheduleReconnectAfterReboot() {
+        rebootReconnectJob?.cancel()
+        rebootReconnectJob = viewModelScope.launch {
+            connectionState = ConnectionState.CONNECTING
+            repeat(15) {
+                bluetoothDevices = repo.scanBleDevices(3000L)
+                selectedBluetoothAddress = repo.selectedDeviceAddress.orEmpty()
+                selectedBluetoothName = repo.selectedDeviceName.orEmpty().ifBlank {
+                    bluetoothDevices.firstOrNull { device -> device.address == selectedBluetoothAddress }?.name.orEmpty()
+                }
+                val address = selectedBluetoothAddress.ifBlank { repo.selectedDeviceAddress.orEmpty() }
+                val device = bluetoothDevices.firstOrNull { it.address == address }
+                if (device != null) {
+                    try {
+                        connectionHint = "ESP32 is coming back up, reconnecting to ${device.name}..."
+                        val connected = repo.connect(device.address)
+                        selectedBluetoothAddress = connected.address
+                        selectedBluetoothName = connected.name
+                        connectionState = ConnectionState.CONNECTED
+                        rebootInProgress = false
+                        rebootReconnectJob?.cancel()
+                        connectionHint = "Connected to ${connected.name}"
+                        configStatus = null
+                        clearConnectionErrors()
+                        refreshConfig()
+                        refreshDiagnostics()
+                        syncTransportLogs()
+                        return@launch
+                    } catch (_: Exception) {
+                        connectionHint = "ESP32 is rebooting... found it, retrying connection"
+                    }
+                } else {
+                    connectionHint = "ESP32 is rebooting... scanning for it to come back up"
+                }
+                delay(2000)
+            }
+            rebootInProgress = false
+            connectionState = ConnectionState.ERROR
+            configStatus = "ESP32 rebooted, but automatic reconnect timed out. Open Bluetooth and reconnect when it reappears."
+            connectionHint = "ESP32 reboot finished. Reconnect when the device reappears."
+        }
     }
 
     private fun startPolling() {
@@ -386,6 +470,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         super.onCleared()
         chatPollJob?.cancel()
         debugPollJob?.cancel()
+        rebootReconnectJob?.cancel()
     }
 }
 

@@ -65,7 +65,7 @@ object E220Protocol {
         val data = requireData(response)
         return E220Config(
             freq = data.optDouble("freq", 868.125).toString(),
-            txpower = data.optInt("txpower", 22).toString(),
+            txpower = data.optInt("txpower", 21).toString(),
             baud = data.optInt("baud", 9600).toString(),
             addr = data.optString("addr", "0x0000"),
             dest = data.optString("dest", "0xFFFF"),
@@ -137,7 +137,7 @@ object E220Protocol {
 
     private fun E220Config.toJson(): JSONObject = JSONObject()
         .put("freq", freq.toDoubleOrNull() ?: 868.125)
-        .put("txpower", txpower.toIntOrNull() ?: 22)
+        .put("txpower", txpower.toIntOrNull() ?: 21)
         .put("baud", baud.toIntOrNull() ?: 9600)
         .put("addr", addr)
         .put("dest", dest)
