@@ -2,7 +2,8 @@ package com.dmahony.e220chat
 
 enum class AppTab(val label: String) {
     CHAT("Chat"),
-    SETTINGS("Settings"),
+    RADIO("Radio"),
+    WIFI("WiFi"),
     DEBUG("Debug")
 }
 
@@ -41,7 +42,13 @@ data class E220Config(
     val worCycle: String = "3",
     val cryptH: String = "0",
     val cryptL: String = "0",
-    val saveType: String = "1"
+    val saveType: String = "1",
+    val wifiEnabled: String = "0",
+    val wifiMode: String = "AP",
+    val wifiApSsid: String = "",
+    val wifiApPassword: String = "",
+    val wifiStaSsid: String = "",
+    val wifiStaPassword: String = ""
 )
 
 data class Diagnostics(
@@ -77,4 +84,23 @@ data class TransportLogEntry(
     val direction: TransportDirection,
     val payload: String,
     val timestampMs: Long = System.currentTimeMillis()
+)
+
+data class WifiStatus(
+    val enabled: Boolean = false,
+    val mode: String = "AP", // AP, STA, or AP_STA
+    val apSsid: String = "",
+    val apPassword: String = "",
+    val staSsid: String = "",
+    val staPassword: String = "",
+    val staConnected: Boolean = false,
+    val staIp: String = "",
+    val apIp: String = ""
+)
+
+data class WifiNetwork(
+    val ssid: String,
+    val rssi: Int,
+    val encrypted: Boolean,
+    val channel: Int
 )

@@ -242,7 +242,7 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     onOpenBluetooth = openBluetoothPicker,
                     onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                 )
-                AppTab.SETTINGS -> SettingsScreen(
+                AppTab.RADIO -> SettingsScreen(
                     vm = vm,
                     onRefresh = vm::refreshConfig,
                     onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
@@ -255,6 +255,10 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     onRefresh = vm::refreshDebugNow,
                     onClear = vm::clearDebug,
                     onTogglePause = vm::toggleDebugPause,
+                    modifier = Modifier.weight(1f)
+                )
+                AppTab.WIFI -> WifiScreen(
+                    vm = vm,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -1092,6 +1096,126 @@ private fun DropdownConfigField(
                         expanded = false
                     }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun WifiScreen(
+    vm: E220ChatViewModel,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val scroll = rememberScrollState()
+
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(scroll)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        if (vm.wifiError != null) ErrorBanner(vm.wifiError!!)
+
+        ConfigSectionCard(
+            title = "WiFi Status",
+            subtitle = "Current connectivity and IP address."
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Enabled: ${if (vm.wifiStatus.enabled) "Yes" else "No"}", style = MaterialTheme.typography.bodyMedium)
+                Text("Mode: ${vm.wifiStatus.mode}", style = MaterialTheme.typography.bodyMedium)
+                if (vm.wifiStatus.mode == "AP") {
+                    Text("AP SSID: ${vm.wifiStatus.apSsid.ifBlank { "Not set" }}", style = MaterialTheme.typography.bodyMedium)
+                    Text("AP IP: ${vm.wifiStatus.apIp.ifBlank { "Not assigned" }}", style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text("STA SSID: ${vm.wifiStatus.staSsid.ifBlank { "Not set" }}", style = MaterialTheme.typography.bodyMedium)
+                    Text("Connected: ${if (vm.wifiStatus.staConnected) "Yes" else "No"}", style = MaterialTheme.typography.bodyMedium)
+                    Text("STA IP: ${vm.wifiStatus.staIp.ifBlank { "Not assigned" }}", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
+        }
+
+        ConfigSectionCard(
+            title = "WiFi Control",
+            subtitle = "Switch modes and manage connectivity."
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { vm.refreshWifi() },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Refresh")
+                    }
+                    Button(
+                        onClick = {
+                            vm.disconnectWifi(
+                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                                onSuccess = { vm.refreshWifi() }
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Disconnect")
+                    }
+                }
+                
+                if (vm.wifiStatus.mode == "AP") {
+                    ConfigField(
+                        label = "AP Password",
+                        value = vm.wifiStatus.apPassword,
+                        supportingText = "Set the password for the ESP32 Access Point.",
+                        modifier = Modifier.fillMaxWidth()
+                    ) { pwd ->
+                        vm.setWifiApPassword(
+                            pwd,
+                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                            onSuccess = { vm.refreshWifi() }
+                        )
+                    }
+                }
+            }
+        }
+
+        ConfigSectionCard(
+            title = "Station Mode",
+            subtitle = "Connect the ESP32 to an existing WiFi network."
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { vm.scanWifiNetworks() },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Scan for Networks")
+                }
+
+                if (vm.wifiNetworks.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        vm.wifiNetworks.forEach { net ->
+                            OutlinedCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = {
+                                    // For now, just a toast as we need a password input dialog
+                                    Toast.makeText(context, "Connect to ${net.ssid}? (Password input not yet implemented)", Toast.LENGTH_SHORT).show()
+                                }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
+                                    Text("${net.rssi} dBm", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
+                } else if (vm.wifiError == null) {
+                    Text("No networks scanned yet.", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }

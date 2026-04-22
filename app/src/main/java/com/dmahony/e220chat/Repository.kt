@@ -206,6 +206,22 @@ class E220Repository(context: Context) {
     }
 
     suspend fun getDiagnostics(): Diagnostics = E220Protocol.parseDiagnosticsResponse(exchange(E220Protocol.buildDiagnosticsRequest()))
+    
+    suspend fun getWifiStatus(): JSONObject = E220Protocol.parseWifiResponse(exchange(E220Protocol.buildWifiGetRequest()))
+
+    suspend fun scanWifi(): JSONObject = E220Protocol.parseWifiResponse(exchange(E220Protocol.buildWifiScanRequest()))
+
+    suspend fun connectWifi(ssid: String, password: String) {
+        exchange(E220Protocol.buildWifiConnectRequest(ssid, password))
+    }
+
+    suspend fun disconnectWifi() {
+        exchange(E220Protocol.buildWifiDisconnectRequest())
+    }
+
+    suspend fun setWifiAp(password: String) {
+        exchange(E220Protocol.buildWifiApRequest(password))
+    }
 
     suspend fun getDebug(): String = E220Protocol.parseDebugLog(exchange(E220Protocol.buildDebugRequest()))
 

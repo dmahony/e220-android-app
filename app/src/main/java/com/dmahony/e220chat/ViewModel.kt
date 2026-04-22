@@ -10,6 +10,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import org.json.JSONArray
+import org.json.JSONObject
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
@@ -44,6 +46,13 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     var diagnostics by mutableStateOf(Diagnostics())
         private set
     var diagnosticsError by mutableStateOf<String?>(null)
+        private set
+
+    var wifiStatus by mutableStateOf(WifiStatus())
+        private set
+    var wifiNetworks by mutableStateOf(listOf<WifiNetwork>())
+        private set
+    var wifiError by mutableStateOf<String?>(null)
         private set
 
     var operationStatus by mutableStateOf(OperationStatus())
@@ -343,6 +352,99 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun refreshWifi() {
+        if (!repo.isConnected) {
+            wifiError = null
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val response = repo.getWifiStatus()
+                wifiStatus = WifiStatus(
+                    enabled = response.optInt("enabled", 0) == 1,
+                    mode = response.optString("mode", "AP"),
+                    apSsid = response.optString("ap_ssid", ""),
+                    apPassword = response.optString("ap_password", ""),
+                    staSsid = response.optString("sta_ssid", ""),
+                    staPassword = response.optString("sta_password", ""),
+                    staConnected = response.optBoolean("sta_connected", false),
+                    staIp = response.optString("sta_ip", ""),
+                    apIp = response.optString("ap_ip", "")
+                )
+                wifiError = null
+                syncTransportLogs()
+            } catch (e: Exception) {
+                wifiError = e.message ?: "WiFi status refresh failed"
+                syncTransportLogs()
+            }
+        }
+    }
+
+    fun scanWifiNetworks() {
+        if (!repo.isConnected) return
+        viewModelScope.launch {
+            try {
+                val response = repo.scanWifi()
+                val networksArray = response.optJSONArray("networks") ?: JSONArray()
+                wifiNetworks = buildList {
+                    for (i in 0 until networksArray.length()) {
+                        val net = networksArray.getJSONObject(i)
+                        add(WifiNetwork(
+                            ssid = net.optString("ssid", "Unknown"),
+                            rssi = net.optInt("rssi", 0),
+                            encrypted = net.optBoolean("encrypted", false),
+                            channel = net.optInt("channel", 0)
+                        ))
+                    }
+                }
+                wifiError = null
+                syncTransportLogs()
+            } catch (e: Exception) {
+                wifiError = e.message ?: "WiFi scan failed"
+                syncTransportLogs()
+            }
+        }
+    }
+
+    fun connectWifi(ssid: String, password: String, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.connectWifi(ssid, password)
+                syncTransportLogs()
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "WiFi connection failed")
+                syncTransportLogs()
+            }
+        }
+    }
+
+    fun disconnectWifi(onError: (String) -> Unit, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.disconnectWifi()
+                syncTransportLogs()
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "WiFi disconnect failed")
+                syncTransportLogs()
+            }
+        }
+    }
+
+    fun setWifiApPassword(password: String, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                repo.setWifiAp(password)
+                syncTransportLogs()
+                onSuccess()
+            } catch (e: Exception) {
+                onError(e.message ?: "WiFi AP update failed")
+                syncTransportLogs()
+            }
+        }
+    }
+
     fun refreshDebugNow() {
         refreshDebug()
     }
@@ -384,6 +486,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         refreshChat()
         refreshConfig()
         refreshDiagnostics()
+        refreshWifi()
         refreshDebug()
     }
 
