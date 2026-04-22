@@ -10,8 +10,10 @@ import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.os.ParcelUuid
 import android.content.Context
 import android.os.Build
 import android.util.Log
@@ -77,28 +79,49 @@ class E220Repository(context: Context) {
 
     fun getTransportLogs(): List<TransportLogEntry> = transportLogs
 
-    suspend fun scanBleDevices(scanMillis: Long = 3000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
+    suspend fun scanBleDevices(scanMillis: Long = 10000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
         val results = linkedMapOf<String, BluetoothDeviceInfo>()
 
-        fun addDevice(device: BluetoothDevice) {
-            val name = device.name ?: device.address
-            if (!name.startsWith(BLE_NAME_PREFIX, ignoreCase = true) && !name.contains("E220", ignoreCase = true) && device.address != selectedDeviceAddress) return
-            results[device.address] = BluetoothDeviceInfo(name = name, address = device.address)
+        fun isExpectedName(name: String?): Boolean =
+            name != null && (name.startsWith(BLE_NAME_PREFIX, ignoreCase = true) || name.contains("E220", ignoreCase = true))
+
+        fun addBondedDevice(device: BluetoothDevice) {
+            val name = device.name
+            if (!isExpectedName(name) && device.address != selectedDeviceAddress) return
+            results[device.address] = BluetoothDeviceInfo(name = name ?: device.address, address = device.address)
+        }
+
+        fun addScanResult(result: ScanResult) {
+            val device = result.device
+            val advertisedName = result.scanRecord?.deviceName ?: device.name
+            val hasExpectedName = isExpectedName(advertisedName)
+            val hasExpectedService = result.scanRecord?.serviceUuids?.any { it.uuid == NUS_SERVICE_UUID } == true
+            val isSelectedDevice = device.address == selectedDeviceAddress
+            Log.d(
+                tag,
+                "BLE scan found: addr=${device.address} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
+            )
+            if (!hasExpectedName && !hasExpectedService && !isSelectedDevice) {
+                Log.d(tag, "BLE scan filtered out: ${device.address}")
+                return
+            }
+            results[device.address] = BluetoothDeviceInfo(name = advertisedName ?: device.address, address = device.address)
+            Log.d(tag, "BLE scan added: ${device.address} (${advertisedName ?: "unnamed"}) total=${results.size}")
         }
 
         adapter?.bondedDevices?.forEach { bonded ->
-            addDevice(bonded)
+            addBondedDevice(bonded)
         }
 
         val scanner = adapter?.bluetoothLeScanner
         if (scanner != null) {
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
-                    addDevice(result.device)
+                    addScanResult(result)
                 }
 
                 override fun onBatchScanResults(resultsBatch: MutableList<ScanResult>) {
-                    resultsBatch.forEach { addDevice(it.device) }
+                    resultsBatch.forEach(::addScanResult)
                 }
 
                 override fun onScanFailed(errorCode: Int) {
@@ -106,11 +129,16 @@ class E220Repository(context: Context) {
                 }
             }
 
+            val filters = listOf(
+                ScanFilter.Builder()
+                    .setServiceUuid(ParcelUuid(NUS_SERVICE_UUID))
+                    .build()
+            )
             val settings = ScanSettings.Builder()
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
-            scanner.startScan(null, settings, scanCallback)
+            scanner.startScan(filters, settings, scanCallback)
             try {
                 delay(scanMillis)
             } finally {
@@ -247,6 +275,9 @@ class E220Repository(context: Context) {
     private suspend fun ensureConnectedLocked() {
         if (isConnected) return
         val address = selectedDeviceAddress ?: throw ApiException("Select a nearby E220 BLE device first")
+        
+        // Avoid rapid reconnect loops: check if we just disconnected
+        delay(100) 
         runBlockingConnect(address)
     }
 
@@ -393,8 +424,17 @@ class E220Repository(context: Context) {
             }
         }
 
+        override fun onCharacteristicChanged(
+            gatt: BluetoothGatt,
+            characteristic: BluetoothGattCharacteristic,
+            value: ByteArray
+        ) {
+            handleIncomingChunk(value.toString(Charsets.UTF_8))
+        }
+
         @Deprecated("Deprecated in Android 13 but still available for older callback signatures")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) return
             val value = characteristic.value ?: return
             handleIncomingChunk(value.toString(Charsets.UTF_8))
         }
@@ -433,6 +473,8 @@ suspend fun <T> retryTransportFailure(
         block()
     } catch (e: Exception) {
         if (e is IOException || e.message?.contains("ble", ignoreCase = true) == true || e.message?.contains("socket", ignoreCase = true) == true) {
+            // Log is handled by the repository calling this or via internal logs
+            delay(500)
             onRetry()
             block()
         } else {

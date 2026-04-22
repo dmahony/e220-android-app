@@ -3,7 +3,7 @@
  * 
  * A dual-device LoRa messaging system using:
  * - ESP32 DevKit microcontroller
- * - Ebyte E220-900T22S 900MHz LoRa modules
+ * - Ebyte E220-900T30D 900MHz LoRa modules
  * - Web UI for chat and configuration
  * - Serial terminal for advanced commands
  * 
@@ -35,6 +35,7 @@
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
+#include <BLEAdvertising.h>
 #include <BLE2902.h>
 
 // GPIO Pin assignments for E220 module
@@ -109,7 +110,7 @@ bool isValidFrequency(float freq) {
   return freq >= 850.125f && freq <= 930.125f;
 }
 
-// Validate TX power is one of the supported hardware values (30/27/24/21 dBm)
+// Validate TX power is one of the supported hardware values for E220-900T30D (30/27/24/21 dBm)
 bool isValidTxPower(int power) {
   return power == 30 || power == 27 || power == 24 || power == 21;
 }
@@ -336,6 +337,13 @@ uint32_t e220_timeout_count = 0;  // Count of E220 AUX timeouts
 uint32_t e220_rx_errors = 0;      // Count of RX protocol errors
 uint32_t e220_tx_errors = 0;      // Count of TX protocol errors
 
+static int lastRssi = 0;  // last RSSI value in dBm
+static int lastAmbientNoiseRssi = 0;  // last ambient noise RSSI in dBm
+static bool hasAmbientNoiseRssi = false;
+
+int readAmbientNoiseRssi();
+String buildTxHistoryEntry(const String &message);
+
 /**
  * E220 Configuration Structure
  * 
@@ -349,7 +357,7 @@ struct {
   // Frequency (MHz) - derived from REG2 (channel): 850.125 + CH, where CH=0-80 (900MHz band)
   float freq;
   
-  // TX Power (dBm) - REG1[1:0]: hardware-dependent, typical 30/27/24/21 dBm
+  // TX Power (dBm) - REG1[1:0]: E220-900T30D uses 30/27/24/21 dBm
   int txpower;
   
   // Serial baud rate (bps) - REG0[7:5]: must match ESP32 UART speed in normal mode
@@ -405,7 +413,7 @@ struct {
   
 } e220_config = {
   930.125,  // freq: 930.125 MHz (CH80, end of band)
-  21,       // txpower: 21 dBm
+  21,       // txpower: 21 dBm default
   9600,     // baud: 9600 bps
   "0x0000", // addr: default address
   "0xFFFF", // dest: broadcast
@@ -504,7 +512,7 @@ uint8_t txpowerToReg(int dbm) {
     case 27: return 1;
     case 24: return 2;
     case 21: return 3;
-    default: return 3; // 21 dBm
+    default: return 3; // 21 dBm default
   }
 }
 
@@ -577,7 +585,7 @@ void readE220Config() {
     
     e220_config.subpkt = (reg1 >> 6) & 0x03;
     e220_config.rssi_noise = (reg1 >> 5) & 0x01;
-    // Reverse TX power from register bits
+    // Reverse TX power from register bits for the E220-900T30D
     static const int powerTable30[] = {30, 27, 24, 21};
     e220_config.txpower = powerTable30[reg1 & 0x03];
     
@@ -816,6 +824,62 @@ void setupWiFi() {
   }
 }
 
+int readAmbientNoiseRssi() {
+  if (!e220_config.rssi_noise) {
+    hasAmbientNoiseRssi = false;
+    return 0;
+  }
+
+  while (e220Serial.available()) e220Serial.read();
+
+  // Once RSSI ambient noise is enabled, the manual allows runtime register reads in transmit mode.
+  uint8_t readCmd[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x01};
+  e220Serial.write(readCmd, sizeof(readCmd));
+  e220Serial.flush();
+
+  uint32_t timeout = millis() + 250;
+  while (e220Serial.available() < 4 && millis() < timeout) {
+    delay(5);
+  }
+
+  if (e220Serial.available() < 4) {
+    hasAmbientNoiseRssi = false;
+    dbg.println("[RSSI] Ambient noise read timed out");
+    return 0;
+  }
+
+  uint8_t hdr = e220Serial.read();
+  uint8_t start = e220Serial.read();
+  uint8_t len = e220Serial.read();
+  uint8_t raw = e220Serial.read();
+  if (hdr != 0xC1 || start != 0x00 || len != 0x01) {
+    hasAmbientNoiseRssi = false;
+    dbg.printf("[RSSI] Ambient noise read invalid header: %02X %02X %02X\n", hdr, start, len);
+    while (e220Serial.available()) e220Serial.read();
+    return 0;
+  }
+
+  lastAmbientNoiseRssi = -(256 - raw);
+  hasAmbientNoiseRssi = true;
+  dbg.printf("[RSSI] Ambient noise raw=0x%02X -> %d dBm\n", raw, lastAmbientNoiseRssi);
+  while (e220Serial.available()) e220Serial.read();
+  return lastAmbientNoiseRssi;
+}
+
+String buildTxHistoryEntry(const String &message) {
+  String entry = "[TX] " + message;
+  if (e220_config.rssi_noise) {
+    int noise = readAmbientNoiseRssi();
+    if (hasAmbientNoiseRssi) {
+      entry += " [NOISE:" + String(noise) + "dBm]";
+    }
+  }
+  if (e220_config.rssi_byte && lastRssi != 0) {
+    entry += " [RSSI:" + String(lastRssi) + "dBm]";
+  }
+  return entry;
+}
+
 #if 0
 void setupFS() {
   if (!LittleFS.begin(true)) {
@@ -928,7 +992,7 @@ void setupWebRoutes() {
     txPending = true;
     
     // Add to history (ring buffer - wrap around if needed)
-    addChatHistory("[TX] " + msg);
+    addChatHistory(buildTxHistoryEntry(msg));
     
     request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Message queued for transmission\"}");
     dbg.printf("[TX] Queued (%d bytes)\n", msg.length());
@@ -994,7 +1058,7 @@ void setupWebRoutes() {
       int power = doc["txpower"];
       if (!isValidTxPower(power)) {
         dbg.printf("[CONFIG] Invalid TX power: %d (valid: 30,27,24,21 dBm)\n", power);
-        request->send(400, "application/json", "{\"error\":\"Invalid TX power (21,24,27,30 dBm)\"}");
+        request->send(400, "application/json", "{\"error\":\"Invalid TX power (30,27,24,21 dBm)\"}");
         return;
       }
       e220_config.txpower = power;
@@ -1271,7 +1335,62 @@ static int rxLen = 0;
 static unsigned long lastRxTime = 0;
 // If no new data for this many ms, flush whatever we have as a complete message
 #define RX_FLUSH_TIMEOUT 2000
-static int lastRssi = 0;  // last RSSI value in dBm
+
+int readAmbientNoiseRssi() {
+  if (!e220_config.rssi_noise) {
+    hasAmbientNoiseRssi = false;
+    return 0;
+  }
+
+  while (e220Serial.available()) e220Serial.read();
+
+  // Once RSSI ambient noise is enabled, the manual allows runtime register reads in transmit mode.
+  uint8_t readCmd[6] = {0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x01};
+  e220Serial.write(readCmd, sizeof(readCmd));
+  e220Serial.flush();
+
+  uint32_t timeout = millis() + 250;
+  while (e220Serial.available() < 4 && millis() < timeout) {
+    delay(5);
+  }
+
+  if (e220Serial.available() < 4) {
+    hasAmbientNoiseRssi = false;
+    dbg.println("[RSSI] Ambient noise read timed out");
+    return 0;
+  }
+
+  uint8_t hdr = e220Serial.read();
+  uint8_t start = e220Serial.read();
+  uint8_t len = e220Serial.read();
+  uint8_t raw = e220Serial.read();
+  if (hdr != 0xC1 || start != 0x00 || len != 0x01) {
+    hasAmbientNoiseRssi = false;
+    dbg.printf("[RSSI] Ambient noise read invalid header: %02X %02X %02X\n", hdr, start, len);
+    while (e220Serial.available()) e220Serial.read();
+    return 0;
+  }
+
+  lastAmbientNoiseRssi = -(256 - raw);
+  hasAmbientNoiseRssi = true;
+  dbg.printf("[RSSI] Ambient noise raw=0x%02X -> %d dBm\n", raw, lastAmbientNoiseRssi);
+  while (e220Serial.available()) e220Serial.read();
+  return lastAmbientNoiseRssi;
+}
+
+String buildTxHistoryEntry(const String &message) {
+  String entry = "[TX] " + message;
+  if (e220_config.rssi_noise) {
+    int noise = readAmbientNoiseRssi();
+    if (hasAmbientNoiseRssi) {
+      entry += " [NOISE:" + String(noise) + "dBm]";
+    }
+  }
+  if (e220_config.rssi_byte && lastRssi != 0) {
+    entry += " [RSSI:" + String(lastRssi) + "dBm]";
+  }
+  return entry;
+}
 
 // Get sub-packet size in bytes from config value
 int getSubPacketSize() {
@@ -1338,7 +1457,7 @@ void processRxPacket() {
     msg.reserve(cleanLen + 1);
     for (int i = 0; i < cleanLen; i++) {
       uint8_t b = cleaned[i];
-      if (b >= 0x20 || b == '\t') {
+      if ((b >= 0x20 && b <= 0x7E) || b == '\t') {
         msg += (char)b;
       }
     }
@@ -1362,7 +1481,7 @@ void processRxPacket() {
     msg.reserve(rxLen + 1);
     for (int i = 0; i < rxLen; i++) {
       uint8_t b = rxBuf[i];
-      if (b >= 0x20 || b == '\t') {
+      if ((b >= 0x20 && b <= 0x7E) || b == '\t') {
         msg += (char)b;
       }
     }
@@ -1485,7 +1604,7 @@ void handleUSBSerial() {
       }
       e220Serial.flush();
       
-      addChatHistory("[TX] " + input);
+      addChatHistory(buildTxHistoryEntry(input));
       dbg.printf("[TX] (%d bytes) %s\n", inputLen, input.c_str());
     }
   }
@@ -1531,16 +1650,22 @@ String jsonWrapOkMessage(const String &message) {
 }
 
 String buildBleChatResponse() {
-  DynamicJsonDocument doc(16384);
-  doc["ok"] = true;
-  JsonObject data = doc.createNestedObject("data");
-  data["sequence"] = chatSequence;
-  JsonArray history = data.createNestedArray("messages");
+  String out = "{\"ok\":true,\"data\":{";
+  out += "\"sequence\":" + String(chatSequence) + ",";
+  out += "\"messages\":[";
   for (size_t i = 0; i < chatHistoryCount; i++) {
-    history.add(getChatHistoryItem(i));
+    String msg = getChatHistoryItem(i);
+    // Escape quotes for JSON
+    String escaped = "";
+    for (unsigned int j = 0; j < msg.length(); j++) {
+      if (msg[j] == '\"') escaped += "\\\"";
+      else if (msg[j] == '\\') escaped += "\\\\";
+      else escaped += msg[j];
+    }
+    out += "\"" + escaped + "\"";
+    if (i < chatHistoryCount - 1) out += ",";
   }
-  String out;
-  serializeJson(doc, out);
+  out += "]}";
   return out;
 }
 
@@ -1621,7 +1746,8 @@ String buildBleDiagnosticsResponse() {
   data["bt_request_count"] = bleRequestCount;
   data["bt_parse_errors"] = bleParseErrors;
   data["bt_raw_message_count"] = bleRawMessageCount;
-  data["last_rssi"] = 0;
+  data["last_rssi"] = lastRssi;
+  data["ambient_noise_rssi"] = hasAmbientNoiseRssi ? lastAmbientNoiseRssi : 0;
   String out;
   serializeJson(doc, out);
   return out;
@@ -1646,11 +1772,15 @@ void bleSendResponse(const String &response) {
   if (!bleTxCharacteristic) return;
   const size_t chunkSize = 20;
   String payload = response + "\n";
+  
+  dbg.printf("[BLE] Sending response (%d bytes)\n", payload.length());
+  
   for (size_t i = 0; i < payload.length(); i += chunkSize) {
-    String chunk = payload.substring(i, min(i + chunkSize, payload.length()));
+    size_t len = min(chunkSize, payload.length() - i);
+    String chunk = payload.substring(i, i + len);
     bleTxCharacteristic->setValue(chunk.c_str());
     bleTxCharacteristic->notify();
-    delay(4);
+    delay(15); // Increased delay to prevent buffer overflow on Android side
   }
 }
 
@@ -1662,7 +1792,7 @@ String applyBleConfigFromJson(JsonObjectConst config) {
   }
   if (config.containsKey("txpower")) {
     int power = config["txpower"];
-    if (!isValidTxPower(power)) return jsonWrapError("Invalid TX power (21,24,27,30 dBm)");
+    if (!isValidTxPower(power)) return jsonWrapError("Invalid TX power (30,27,24,21 dBm)");
     e220_config.txpower = power;
   }
   if (config.containsKey("baud")) {
@@ -1740,7 +1870,7 @@ String handleBleApiRequest(const String &line) {
     if (message.length() > 2000) return buildBleError("Message too large (max 2000 bytes)");
     txQueue = message;
     txPending = true;
-    addChatHistory("[TX] " + message);
+    addChatHistory(buildTxHistoryEntry(message));
     dbg.printf("[BLE] Queued %d-byte message\n", message.length());
     return jsonWrapOkMessage("Message queued for transmission");
   }
@@ -1838,7 +1968,13 @@ void setupBleTransport() {
 
   bleService->start();
   bleAdvertising = BLEDevice::getAdvertising();
-  bleAdvertising->addServiceUUID(BLE_UART_SERVICE_UUID);
+  BLEAdvertisementData advertisementData;
+  advertisementData.setFlags(0x06);
+  advertisementData.setCompleteServices(BLE_UART_SERVICE_UUID);
+  BLEAdvertisementData scanResponseData;
+  scanResponseData.setName(bleDeviceName.c_str());
+  bleAdvertising->setAdvertisementData(advertisementData);
+  bleAdvertising->setScanResponseData(scanResponseData);
   bleAdvertising->setScanResponse(true);
   bleAdvertising->setMinPreferred(0x06);
   bleAdvertising->setMaxPreferred(0x12);
@@ -1993,7 +2129,7 @@ void handleUSBSerial() {
     if (line.startsWith("/send ")) {
       txQueue = line.substring(6);
       txPending = true;
-      addChatHistory("[TX] " + txQueue);
+      addChatHistory(buildTxHistoryEntry(txQueue));
     } else if (line == "/status") {
       dbg.println(buildBleDiagnosticsResponse());
     }
