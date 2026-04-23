@@ -1,21 +1,19 @@
 # E220 Android App
 
-A lightweight Android chat client for E220-based radio devices. The app connects to a nearby BLE companion device, exchanges JSON requests over GATT, and provides a chat-first UI for sending and receiving messages, viewing device settings, and checking debug/diagnostic status.
+A lightweight Android chat client for E220-based radio devices. The app connects to a nearby BLE companion device, exchanges JSON requests over GATT, and provides a conversation-first UI for messaging, radio configuration, WiFi control, and diagnostics.
 
 The matching ESP32 companion firmware is included in `firmware/esp32-e220-fw/`.
-
-## Screenshot
-
-![E220 Android app main screen](assets/e220-chat-home.png)
 
 ## Features
 
 - BLE scan and connect flow
-- Chat screen for sending and receiving messages
-- Settings screen for reading and saving radio configuration
+- Chat-first messaging UI
+- Slash-command composer actions
+- Radio configuration controls backed by the E220 manual
+- WiFi settings and network scan/connect support
 - Debug and diagnostics views
 - Dark and light themes
-- Compose-based UI
+- Jetpack Compose and Material 3 UI
 
 ## Requirements
 
@@ -48,13 +46,24 @@ The app talks to the device over BLE using JSON messages with endpoints such as:
 3. Scan for a nearby E220 BLE device.
 4. Connect, then use the Chat, Settings, and Debug tabs.
 
+## Changelog
+
+### Recent updates
+
+- Migrated protocol JSON handling to `kotlinx.serialization`.
+- Restored E220 Bluetooth discovery and ESP32 BLE advertising.
+- Added slash-command behavior to the composer.
+- Added WiFi settings, including scan and connect support.
+- Expanded the radio settings UI with manual-backed dropdowns.
+- Improved chat and BLE stability across the app and firmware.
+- Updated the Gradle wrapper and build tooling.
+
 ## Project structure
 
 - `app/src/main/java/com/dmahony/e220chat/` - Android app code
 - `app/src/main/res/` - resources and themes
 - `app/src/test/` - unit tests
 - `firmware/esp32-e220-fw/` - ESP32 companion firmware
-- `assets/e220-chat-home.png` - screenshot used in this README
 
 ## Notes
 
