@@ -198,6 +198,7 @@ class E220Repository(context: Context) {
             val device = adapter?.getRemoteDevice(address)
                 ?: throw ApiException("Bluetooth LE is not available on this device")
             closeGattLocked()
+            delay(CONNECT_RETRY_DELAY_MS)
             val connectDeferred = CompletableDeferred<Unit>()
             pendingConnect = connectDeferred
             val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -361,6 +362,7 @@ class E220Repository(context: Context) {
         val connectDeferred = CompletableDeferred<Unit>()
         pendingConnect = connectDeferred
         closeGattLocked()
+        delay(CONNECT_RETRY_DELAY_MS)
         val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } else {
@@ -388,6 +390,10 @@ class E220Repository(context: Context) {
             responseBuffer = StringBuilder()
         }
         try {
+            refreshGattCache()
+        } catch (_: Exception) {
+        }
+        try {
             bluetoothGatt?.disconnect()
         } catch (_: Exception) {
         }
@@ -398,6 +404,17 @@ class E220Repository(context: Context) {
         bluetoothGatt = null
         rxCharacteristic = null
         txCharacteristic = null
+    }
+
+    private fun refreshGattCache(): Boolean {
+        val gatt = bluetoothGatt ?: return false
+        return try {
+            val refresh = gatt.javaClass.getMethod("refresh")
+            refresh.isAccessible = true
+            refresh.invoke(gatt) as Boolean
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun appendTransportLog(direction: TransportDirection, payload: String) {
@@ -476,6 +493,7 @@ class E220Repository(context: Context) {
             }
             val notifyChar = txCharacteristic ?: return
             gatt.setCharacteristicNotification(notifyChar, true)
+            gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
             val descriptor = notifyChar.getDescriptor(CLIENT_CONFIG_UUID)
             if (descriptor == null) {
                 pendingConnect?.completeExceptionally(IOException("BLE notification descriptor not found"))
@@ -532,6 +550,7 @@ class E220Repository(context: Context) {
         private const val RESPONSE_TIMEOUT_MS = 10000L
         private const val WIFI_SCAN_TIMEOUT_MS = 15000L
         private const val CONNECT_TIMEOUT_MS = 20000L
+        private const val CONNECT_RETRY_DELAY_MS = 250L
         private const val BLE_NAME_PREFIX = "E220-Chat-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
         private val NUS_RX_UUID: UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")

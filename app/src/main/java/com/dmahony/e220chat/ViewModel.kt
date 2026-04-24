@@ -15,6 +15,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     private val repo = E220Repository(application.applicationContext)
     private var rebootReconnectJob: Job? = null
     private var rebootInProgress = false
+    private var chatRefreshJob: Job? = null
+    private var debugRefreshJob: Job? = null
 
     var selectedTab by mutableStateOf(AppTab.CHAT)
         private set
@@ -145,6 +147,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 connectionHint = "Connected to ${connected.name}"
                 configStatus = null
                 clearConnectionErrors()
+                delay(250)
                 refreshConfig()
                 refreshDiagnostics()
                 syncTransportLogs()
@@ -227,7 +230,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             chatError = null
             return
         }
-        viewModelScope.launch {
+        if (chatRefreshJob?.isActive == true) return
+        chatRefreshJob = viewModelScope.launch {
             try {
                 val snapshot = repo.getChat()
                 if (snapshot.sequence != lastChatSequence) {
@@ -241,6 +245,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     chatError = e.message ?: "Chat refresh failed"
                 }
                 syncTransportLogs()
+            } finally {
+                chatRefreshJob = null
             }
         }
     }
@@ -550,7 +556,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     private fun refreshDebug() {
         if (debugPaused || !repo.isConnected) return
-        viewModelScope.launch {
+        if (debugRefreshJob?.isActive == true) return
+        debugRefreshJob = viewModelScope.launch {
             try {
                 debugText = repo.getDebug()
                 operationStatus = repo.getOperation()
@@ -559,6 +566,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 if (!rebootInProgress) {
                     syncTransportLogs()
                 }
+            } finally {
+                debugRefreshJob = null
             }
         }
     }
@@ -596,6 +605,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                         connectionHint = "Connected to ${connected.name}"
                         configStatus = null
                         clearConnectionErrors()
+                        delay(250)
                         refreshConfig()
                         refreshDiagnostics()
                         syncTransportLogs()
