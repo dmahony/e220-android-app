@@ -16,6 +16,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     private var rebootReconnectJob: Job? = null
     private var rebootInProgress = false
     private var chatRefreshJob: Job? = null
+    private var configRefreshJob: Job? = null
+    private var diagnosticsRefreshJob: Job? = null
     private var debugRefreshJob: Job? = null
 
     var selectedTab by mutableStateOf(AppTab.CHAT)
@@ -256,7 +258,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             configError = null
             return
         }
-        viewModelScope.launch {
+        if (configRefreshJob?.isActive == true) return
+        configRefreshJob = viewModelScope.launch {
             try {
                 config = repo.getConfig()
                 configError = null
@@ -266,6 +269,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     configError = e.message ?: "Config load failed"
                 }
                 syncTransportLogs()
+            } finally {
+                configRefreshJob = null
             }
         }
     }
@@ -302,6 +307,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     onError("Connect to BLE first")
                     return@launch
                 }
+                configRefreshJob?.cancel()
+                diagnosticsRefreshJob?.cancel()
                 config = repo.saveConfig(config)
                 configStatus = "Configuration applied"
                 configError = null
@@ -356,7 +363,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             diagnosticsError = null
             return
         }
-        viewModelScope.launch {
+        if (diagnosticsRefreshJob?.isActive == true) return
+        diagnosticsRefreshJob = viewModelScope.launch {
             try {
                 diagnostics = repo.getDiagnostics()
                 diagnosticsError = null
@@ -366,6 +374,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     diagnosticsError = e.message ?: "Diagnostics failed"
                 }
                 syncTransportLogs()
+            } finally {
+                diagnosticsRefreshJob = null
             }
         }
     }
