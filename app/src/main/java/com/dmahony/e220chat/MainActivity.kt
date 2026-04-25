@@ -43,6 +43,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -971,6 +972,132 @@ private fun SettingsScreen(
 }
 
 @Composable
+private fun DebugActionBar(
+    onRefresh: () -> Unit,
+    onClear: () -> Unit,
+    onTogglePause: () -> Unit,
+    debugPaused: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilledTonalButton(
+                onClick = onRefresh,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Refresh", style = MaterialTheme.typography.labelMedium)
+            }
+            OutlinedButton(
+                onClick = onClear,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Clear Log", style = MaterialTheme.typography.labelMedium)
+            }
+            FilledTonalButton(
+                onClick = onTogglePause,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                modifier = Modifier.height(36.dp)
+            ) {
+                Icon(
+                    if (debugPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(if (debugPaused) "Resume" else "Pause", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsCard(diagnostics: Diagnostics) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("ESP32 diagnostics", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiniChip("Timeouts ${diagnostics.e220Timeouts}")
+                MiniChip("RX ${diagnostics.e220RxErrors}")
+                MiniChip("TX ${diagnostics.e220TxErrors}")
+            }
+            Text("Bluetooth name: ${diagnostics.btName.ifBlank { "Unknown" }}")
+            Text("Bluetooth client connected: ${if (diagnostics.btHasClient) "Yes" else "No"}")
+            Text("Uptime: ${diagnostics.uptimeMs} ms")
+            Text("Free heap: ${diagnostics.freeHeap}")
+            Text("Min free heap: ${diagnostics.minFreeHeap}")
+            Text("App requests seen by ESP32: ${diagnostics.btRequestCount}")
+            Text("Parse errors on ESP32: ${diagnostics.btParseErrors}")
+            Text("Raw radio messages: ${diagnostics.btRawMessageCount}")
+            Text("Last RSSI: ${diagnostics.lastRssi}")
+        }
+    }
+}
+
+@Composable
+private fun TransportLogCard(logText: String) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Bluetooth protocol transcript", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Everything the app sends to and receives from the ESP32 over Bluetooth.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
+                Text(
+                    text = logText.ifBlank { "No Bluetooth transcript yet." },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun RadioLogCard(logText: String) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("ESP32 radio log", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "This is the firmware log, including radio TX/RX lines coming from the E220 attached to the ESP32.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall
+            )
+            Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
+                Text(
+                    text = logText.ifBlank { "No radio debug output yet." },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun DebugScreen(
     vm: E220ChatViewModel,
     onRefresh: () -> Unit,
@@ -978,93 +1105,26 @@ private fun DebugScreen(
     onTogglePause: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scroll = rememberScrollState()
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (vm.diagnosticsError != null) ErrorBanner(vm.diagnosticsError!!)
+    Column(modifier = modifier.fillMaxSize()) {
+        DebugActionBar(
+            onRefresh = onRefresh,
+            onClear = onClear,
+            onTogglePause = onTogglePause,
+            debugPaused = vm.debugPaused
+        )
 
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ESP32 diagnostics", style = MaterialTheme.typography.titleMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    MiniChip("Timeouts ${vm.diagnostics.e220Timeouts}")
-                    MiniChip("RX ${vm.diagnostics.e220RxErrors}")
-                    MiniChip("TX ${vm.diagnostics.e220TxErrors}")
-                }
-                Text("Bluetooth name: ${vm.diagnostics.btName.ifBlank { "Unknown" }}")
-                Text("Bluetooth client connected: ${if (vm.diagnostics.btHasClient) "Yes" else "No"}")
-                Text("Uptime: ${vm.diagnostics.uptimeMs} ms")
-                Text("Free heap: ${vm.diagnostics.freeHeap}")
-                Text("Min free heap: ${vm.diagnostics.minFreeHeap}")
-                Text("App requests seen by ESP32: ${vm.diagnostics.btRequestCount}")
-                Text("Parse errors on ESP32: ${vm.diagnostics.btParseErrors}")
-                Text("Raw radio messages: ${vm.diagnostics.btRawMessageCount}")
-                Text("Last RSSI: ${vm.diagnostics.lastRssi}")
-                FilledTonalButton(onClick = onRefresh) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Refresh")
-                }
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            if (vm.diagnosticsError != null) {
+                item { ErrorBanner(vm.diagnosticsError!!) }
             }
-        }
 
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Bluetooth protocol transcript", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "Everything the app sends to and receives from the ESP32 over Bluetooth.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
-                    Text(
-                        text = vm.transportLogText.ifBlank { "No Bluetooth transcript yet." },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-        }
-
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("ESP32 radio log", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "This is the firmware log, including radio TX/RX lines coming from the E220 attached to the ESP32.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onClear) {
-                        Icon(Icons.Default.Clear, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Clear")
-                    }
-                    FilledTonalButton(onClick = onTogglePause) {
-                        Icon(if (vm.debugPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (vm.debugPaused) "Resume" else "Pause")
-                    }
-                }
-                Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
-                    Text(
-                        text = vm.debugText.ifBlank { "No radio debug output yet." },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
+            item { DiagnosticsCard(vm.diagnostics) }
+            item { TransportLogCard(vm.transportLogText) }
+            item { RadioLogCard(vm.debugText) }
         }
     }
 }
