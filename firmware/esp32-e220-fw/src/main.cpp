@@ -37,6 +37,8 @@
 #include <BLEUtils.h>
 #include <BLEAdvertising.h>
 #include <BLE2902.h>
+#include <esp_now.h>
+#include <esp_wifi.h>
 
 // GPIO Pin assignments for E220 module
 #define E220_RX_PIN   21              // UART2 RX from E220
@@ -54,6 +56,9 @@ Preferences preferences;
 
 static const size_t CHAT_HISTORY_SIZE = 100;
 static const uint32_t ADMIN_SESSION_TTL_MS = 30UL * 60UL * 1000UL;
+static const uint32_t ESPNOW_CHAT_MAGIC = 0x45323230UL;  // "E220"
+static const uint8_t ESPNOW_CHANNEL = 1;
+static const size_t ESPNOW_CHAT_MAX_LEN = 190;
 
 enum OperationType {
   OP_NONE,
@@ -96,6 +101,15 @@ struct {
 
 bool rebootPending = false;
 uint32_t rebootRequestedAt = 0;
+bool espNowReady = false;
+uint32_t espNowSequence = 0;
+
+struct EspNowChatPacket {
+  uint32_t magic;
+  uint32_t sequence;
+  uint8_t length;
+  char message[ESPNOW_CHAT_MAX_LEN + 1];
+};
 
 /**
  * Validation Helper Functions
@@ -327,6 +341,87 @@ public:
 
 DebugPrint dbg;
 
+
+void onEspNowSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  dbg.printf("[ESPNOW] Broadcast send %s\n", status == ESP_NOW_SEND_SUCCESS ? "queued" : "failed");
+}
+
+void onEspNowReceived(const uint8_t *mac_addr, const uint8_t *incomingData, int len) {
+  if (len != sizeof(EspNowChatPacket)) {
+    dbg.printf("[ESPNOW] Ignoring packet with unexpected length %d\n", len);
+    return;
+  }
+
+  EspNowChatPacket packet;
+  memcpy(&packet, incomingData, sizeof(packet));
+  if (packet.magic != ESPNOW_CHAT_MAGIC || packet.length == 0 || packet.length > ESPNOW_CHAT_MAX_LEN) {
+    dbg.println("[ESPNOW] Ignoring non-chat packet");
+    return;
+  }
+
+  packet.message[packet.length] = '\0';
+  String message(packet.message);
+  message.trim();
+  if (message.length() == 0) return;
+
+  dbg.printf("[ESPNOW] RX from %02X:%02X:%02X:%02X:%02X:%02X: %s\n",
+             mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5],
+             message.c_str());
+  addChatHistory("[RX] " + message);
+}
+
+void setupEspNowBridge() {
+  WiFi.mode(WIFI_STA);
+  WiFi.disconnect(false, false);
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous(false);
+
+  esp_err_t initResult = esp_now_init();
+  if (initResult != ESP_OK) {
+    dbg.printf("[ESPNOW] init failed: %d\n", initResult);
+    espNowReady = false;
+    return;
+  }
+
+  esp_now_register_send_cb(onEspNowSent);
+  esp_now_register_recv_cb(onEspNowReceived);
+
+  esp_now_peer_info_t peerInfo = {};
+  memset(peerInfo.peer_addr, 0xFF, 6);
+  peerInfo.channel = ESPNOW_CHANNEL;
+  peerInfo.encrypt = false;
+  if (!esp_now_is_peer_exist(peerInfo.peer_addr)) {
+    esp_err_t peerResult = esp_now_add_peer(&peerInfo);
+    if (peerResult != ESP_OK) {
+      dbg.printf("[ESPNOW] broadcast peer add failed: %d\n", peerResult);
+      espNowReady = false;
+      return;
+    }
+  }
+
+  espNowReady = true;
+  dbg.printf("[ESPNOW] Chat bridge ready on channel %u\n", ESPNOW_CHANNEL);
+}
+
+void sendEspNowChat(const String &message) {
+  if (!espNowReady) return;
+  EspNowChatPacket packet = {};
+  packet.magic = ESPNOW_CHAT_MAGIC;
+  packet.sequence = ++espNowSequence;
+  packet.length = min((size_t)message.length(), ESPNOW_CHAT_MAX_LEN);
+  memcpy(packet.message, message.c_str(), packet.length);
+  packet.message[packet.length] = '\0';
+
+  static const uint8_t broadcastAddress[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_err_t result = esp_now_send(broadcastAddress, (const uint8_t *)&packet, sizeof(packet));
+  if (result == ESP_OK) {
+    dbg.printf("[ESPNOW] TX broadcast seq=%u len=%u\n", packet.sequence, packet.length);
+  } else {
+    dbg.printf("[ESPNOW] TX broadcast failed: %d\n", result);
+  }
+}
+
 // TX queue: messages queued from web handler, sent from loop()
 // This avoids blocking the async_tcp task and triggering the watchdog
 String txQueue = "";
@@ -531,14 +626,16 @@ void readE220Config() {
   // Wait for AUX to go LOW first (indicates switch has started)
   delay(15);  // Ensure mode switch has begun
   
-  // Now wait for AUX to go HIGH (module ready for config commands)
+  // Now wait for AUX to go HIGH (module ready for config commands).
+  // Some ESP32/E220 carrier wiring does not expose AUX reliably; do not abort
+  // the register transaction solely because AUX stayed low. Use a conservative
+  // fixed delay fallback so config reads/writes can still reach the module.
   if (!waitE220Ready(2000)) {
-    dbg.println("[E220] Config mode failed - AUX timeout");
-    setE220Mode(0);
-    return;
+    dbg.println("[E220] WARNING: AUX did not report ready in config mode; continuing with timed fallback");
+    delay(500);
   }
   
-  // Extra settling delay after AUX goes HIGH
+  // Extra settling delay after AUX/fallback wait
   delay(50);
   
   // Flush any stale data
@@ -612,9 +709,11 @@ void readE220Config() {
     dbg.printf("[E220] AUX pin state: %s\n", digitalRead(E220_AUX_PIN) ? "HIGH" : "LOW");
   }
   
-  // Return to NORMAL mode
+  // Return to NORMAL mode and switch ESP32 UART to the module's configured
+  // normal-mode baud. Config mode is always 9600, but RF data mode follows REG0.
   setE220Mode(0);
-  delay(50);
+  delay(200);
+  setE220UARTBaud(e220_config.baud);
 }
 
 void applyE220Config() {
@@ -631,11 +730,12 @@ void applyE220Config() {
   // Per manual Section 5.2.4: mode switch takes 9-11ms
   delay(15);
   
-  // Wait for AUX to go HIGH per manual Section 5.2
+  // Wait for AUX to go HIGH per manual Section 5.2. If AUX is not wired or is
+  // held low, continue after a fixed delay rather than skipping the write; the
+  // module can still accept config commands after the mode-settle interval.
   if (!waitE220Ready(2000)) {
-    dbg.println("[E220] Config mode failed - AUX timeout");
-    setE220Mode(0);  // Return to normal mode
-    return;
+    dbg.println("[E220] WARNING: AUX did not report ready before config write; continuing with timed fallback");
+    delay(500);
   }
   
   // Extra settling delay
@@ -747,6 +847,7 @@ void applyE220Config() {
   delay(200);
   
   dbg.println("[E220] Config applied, back to normal mode");
+  setE220UARTBaud(e220_config.baud);
   
   // Read back to verify
   delay(200);
@@ -1379,6 +1480,19 @@ int getSubPacketSize() {
 //   [200 data bytes] [RSSI] [10 data bytes] [RSSI]
 void processRxPacket() {
   if (rxLen == 0) return;
+  bool allFf = true;
+  for (int i = 0; i < rxLen; i++) {
+    if (rxBuf[i] != 0xFF) {
+      allFf = false;
+      break;
+    }
+  }
+  if (allFf) {
+    e220_rx_errors++;
+    dbg.println("[E220] Ignoring local FF status/error bytes");
+    rxLen = 0;
+    return;
+  }
   
   int rssiRaw = -1;
   String msg = "";
@@ -1702,6 +1816,13 @@ String buildBleDiagnosticsResponse() {
   data["bt_raw_message_count"] = bleRawMessageCount;
   data["last_rssi"] = lastRssi;
   data["ambient_noise_rssi"] = hasAmbientNoiseRssi ? lastAmbientNoiseRssi : 0;
+  data["e220_aux_pin"] = digitalRead(E220_AUX_PIN);
+  data["e220_m0_pin"] = digitalRead(E220_M0_PIN);
+  data["e220_m1_pin"] = digitalRead(E220_M1_PIN);
+  data["e220_rx_gpio"] = E220_RX_PIN;
+  data["e220_tx_gpio"] = E220_TX_PIN;
+  data["espnow_ready"] = espNowReady;
+  data["espnow_channel"] = ESPNOW_CHANNEL;
   String out;
   serializeJson(doc, out);
   return out;
@@ -2050,6 +2171,7 @@ void setup() {
   
   setupE220();
   setupBleTransport();
+  setupEspNowBridge();
   readE220Config();
   
   dbg.println("[BOOT] Ready!");
@@ -2163,6 +2285,7 @@ void handleTxQueue() {
     e220Serial.print('\n');
   }
   e220Serial.flush();
+  sendEspNowChat(txQueue);
   
   dbg.printf("[TX] Sent %d bytes\n", msgLen);
   txQueue = "";
@@ -2174,8 +2297,26 @@ void handleE220Serial() {
     String line = e220Serial.readStringUntil('\n');
     line.trim();
     if (line.length() == 0) continue;
-    dbg.printf("[E220] RX: %s\n", line.c_str());
-    addChatHistory("[RX] " + line);
+
+    bool printable = true;
+    bool allFf = true;
+    for (size_t i = 0; i < line.length(); i++) {
+      uint8_t b = (uint8_t)line.charAt(i);
+      if (b != 0xFF) allFf = false;
+      if (!((b >= 0x20 && b <= 0x7E) || b == '\t')) printable = false;
+    }
+
+    if (printable) {
+      dbg.printf("[E220] RX: %s\n", line.c_str());
+      addChatHistory("[RX] " + line);
+    } else {
+      e220_rx_errors++;
+      dbg.print("[E220] RX ignored HEX:");
+      for (size_t i = 0; i < line.length(); i++) {
+        dbg.printf(" %02X", (uint8_t)line.charAt(i));
+      }
+      dbg.println(allFf ? " (all FF)" : " (non-printable)");
+    }
   }
 }
 

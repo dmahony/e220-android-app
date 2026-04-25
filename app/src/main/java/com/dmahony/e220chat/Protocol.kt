@@ -22,34 +22,20 @@ object E220Protocol {
 
     fun buildConfigGetRequest(): String = request("/api/config", "GET")
 
-    fun buildConfigRequest(config: E220Config): String = request("/api/config", "POST") {
-        putJsonObject("config") {
-            put("freq", config.freq.toDoubleOrNull() ?: 868.125)
-            put("txpower", config.txpower.toIntOrNull() ?: 21)
-            put("baud", config.baud.toIntOrNull() ?: 9600)
-            put("addr", config.addr)
-            put("dest", config.dest)
-            put("airrate", config.airrate.toIntOrNull() ?: 2)
-            put("subpkt", config.subpkt.toIntOrNull() ?: 0)
-            put("parity", config.parity.toIntOrNull() ?: 0)
-            put("txmode", config.txmode.toIntOrNull() ?: 0)
-            put("rssi_noise", config.rssiNoise.toIntOrNull() ?: 0)
-            put("rssi_byte", config.rssiByte.toIntOrNull() ?: 0)
-            put("lbt", config.lbt.toIntOrNull() ?: 0)
-            put("lbr_rssi", config.lbrRssi.toIntOrNull() ?: -55)
-            put("lbr_timeout", config.lbrTimeout.toIntOrNull() ?: 2000)
-            put("urxt", config.urxt.toIntOrNull() ?: 3)
-            put("wor_cycle", config.worCycle.toIntOrNull() ?: 3)
-            put("crypt_h", config.cryptH.toIntOrNull() ?: 0)
-            put("crypt_l", config.cryptL.toIntOrNull() ?: 0)
-            put("savetype", config.saveType.toIntOrNull() ?: 1)
-            put("wifi_enabled", config.wifiEnabled.toIntOrNull() ?: 0)
-            put("wifi_mode", config.wifiMode)
-            put("wifi_ap_ssid", config.wifiApSsid)
-            put("wifi_ap_password", config.wifiApPassword)
-            put("wifi_sta_ssid", config.wifiStaSsid)
-            put("wifi_sta_password", config.wifiStaPassword)
+    fun buildConfigRequest(config: E220Config): String {
+        val configJson = buildConfigJson(config)
+        val envelope = buildJsonObject {
+            put("path", "/api/config")
+            put("method", "POST")
+            // Current BLE firmware consumes top-level "config". Some deployed builds consume POST payloads from "body".
+            // Send both shapes so save works across firmware revisions.
+            put("config", configJson)
+            putJsonObject("body") {
+                put("config", configJson)
+                for ((key, value) in configJson) put(key, value)
+            }
         }
+        return E220Json.encodeToString(envelope)
     }
 
     fun buildOperationRequest(): String = request("/api/operation", "GET")
@@ -100,7 +86,7 @@ object E220Protocol {
     }
 
     fun parseConfigResponse(response: String): E220Config {
-        val data = requireData(response)
+        val data = requireConfigData(response)
         return E220Config(
             freq = data.optDouble("freq", 868.125).toString(),
             txpower = data.optInt("txpower", 21).toString(),
@@ -228,6 +214,43 @@ object E220Protocol {
         }
     }
 
+    private fun buildConfigJson(config: E220Config): JsonObject = buildJsonObject {
+        put("freq", config.freq.toDoubleOrNull() ?: 868.125)
+        put("txpower", config.txpower.toIntOrNull() ?: 21)
+        put("baud", config.baud.toIntOrNull() ?: 9600)
+        put("addr", config.addr)
+        put("dest", config.dest)
+        put("airrate", config.airrate.toIntOrNull() ?: 2)
+        put("subpkt", config.subpkt.toIntOrNull() ?: 0)
+        put("parity", config.parity.toIntOrNull() ?: 0)
+        put("txmode", config.txmode.toIntOrNull() ?: 0)
+        put("rssi_noise", config.rssiNoise.toIntOrNull() ?: 0)
+        put("rssi_byte", config.rssiByte.toIntOrNull() ?: 0)
+        put("lbt", config.lbt.toIntOrNull() ?: 0)
+        put("lbr_rssi", config.lbrRssi.toIntOrNull() ?: -55)
+        put("lbr_timeout", config.lbrTimeout.toIntOrNull() ?: 2000)
+        put("urxt", config.urxt.toIntOrNull() ?: 3)
+        put("wor_cycle", config.worCycle.toIntOrNull() ?: 3)
+        put("crypt_h", config.cryptH.toIntOrNull() ?: 0)
+        put("crypt_l", config.cryptL.toIntOrNull() ?: 0)
+        put("savetype", config.saveType.toIntOrNull() ?: 1)
+        put("wifi_enabled", config.wifiEnabled.toIntOrNull() ?: 0)
+        put("wifi_mode", config.wifiMode)
+        put("wifi_ap_ssid", config.wifiApSsid)
+        put("wifi_ap_password", config.wifiApPassword)
+        put("wifi_sta_ssid", config.wifiStaSsid)
+        put("wifi_sta_password", config.wifiStaPassword)
+    }
+
+    fun hasConfigPayload(response: String): Boolean = runCatching {
+        val envelope = parseEnvelope(response)
+        val data = envelope["data"]?.jsonObject
+        data?.containsConfigFields() == true ||
+            data?.get("config")?.jsonObject?.containsConfigFields() == true ||
+            envelope["config"]?.jsonObject?.containsConfigFields() == true ||
+            envelope.containsConfigFields()
+    }.getOrDefault(false)
+
     private fun parseEnvelope(response: String): JsonObject {
         return try {
             E220Json.parseToJsonElement(response).jsonObject
@@ -243,6 +266,27 @@ object E220Protocol {
         }
         return envelope["data"]?.jsonObject ?: JsonObject(emptyMap())
     }
+
+    private fun requireConfigData(response: String): JsonObject {
+        val envelope = parseEnvelope(response)
+        val ok = envelope.optBooleanFlexible("ok", false) || envelope.optString("status", "").equals("ok", ignoreCase = true)
+        if (!ok && envelope.containsKey("error")) {
+            throw ApiException(envelope.optString("error", "Config request failed"))
+        }
+        val data = envelope["data"]?.jsonObject
+        return when {
+            data?.get("config") is JsonObject -> data["config"]!!.jsonObject
+            data?.containsConfigFields() == true -> data
+            envelope["config"] is JsonObject -> envelope["config"]!!.jsonObject
+            envelope.containsConfigFields() -> envelope
+            ok -> throw ApiException("Config response did not include E220 configuration")
+            else -> throw ApiException(envelope.optString("error", "Config request failed"))
+        }
+    }
+
+    private fun JsonObject.containsConfigFields(): Boolean =
+        containsKey("freq") || containsKey("txpower") || containsKey("baud") ||
+            containsKey("addr") || containsKey("airrate") || containsKey("wor_cycle")
 
     private fun request(path: String, method: String, extra: JsonObjectBuilder.() -> Unit = {}): String {
         val envelope = buildJsonObject {

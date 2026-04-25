@@ -237,7 +237,24 @@ class E220Repository(context: Context) {
 
     suspend fun getConfig(): E220Config = E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigGetRequest()))
 
-    suspend fun saveConfig(config: E220Config): E220Config = E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigRequest(config)))
+    suspend fun saveConfig(config: E220Config): E220Config = withContext(Dispatchers.IO) {
+        val response = exchange(E220Protocol.buildConfigRequest(config))
+        if (E220Protocol.hasConfigPayload(response)) {
+            return@withContext E220Protocol.parseConfigResponse(response)
+        }
+
+        val deadlineMs = System.currentTimeMillis() + CONFIG_APPLY_TIMEOUT_MS
+        while (System.currentTimeMillis() < deadlineMs) {
+            delay(300)
+            val operation = runCatching { getOperation() }.getOrNull()
+            if (operation == null || operation.type != "apply_config") continue
+            when (operation.state) {
+                "success", "idle" -> return@withContext getConfig()
+                "error" -> throw ApiException(operation.message.ifBlank { "Config apply failed" })
+            }
+        }
+        getConfig()
+    }
 
     suspend fun getOperation(): OperationStatus = E220Protocol.parseOperationResponse(exchange(E220Protocol.buildOperationRequest()))
 
@@ -548,6 +565,7 @@ class E220Repository(context: Context) {
         private const val KEY_BT_DEVICE_NAME = "bt_device_name"
         private const val MAX_TRANSPORT_LOGS = 200
         private const val RESPONSE_TIMEOUT_MS = 10000L
+        private const val CONFIG_APPLY_TIMEOUT_MS = 12000L
         private const val WIFI_SCAN_TIMEOUT_MS = 15000L
         private const val CONNECT_TIMEOUT_MS = 20000L
         private const val CONNECT_RETRY_DELAY_MS = 250L

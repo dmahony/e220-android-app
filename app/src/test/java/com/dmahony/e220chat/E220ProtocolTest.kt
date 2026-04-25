@@ -48,12 +48,14 @@ class E220ProtocolTest {
         )
         val envelope = json.parseToJsonElement(request).jsonObject
         val config = envelope["config"]!!.jsonObject
+        val bodyConfig = envelope["body"]!!.jsonObject["config"]!!.jsonObject
 
         assertEquals(915.125, requireNotNull(config["freq"]?.jsonPrimitive?.doubleOrNull), 0.0)
         assertEquals(30, config["txpower"]?.jsonPrimitive?.intOrNull)
         assertEquals("0x0001", config["addr"]?.jsonPrimitive?.content)
         assertEquals(1, config["txmode"]?.jsonPrimitive?.intOrNull)
         assertEquals(34, config["crypt_l"]?.jsonPrimitive?.intOrNull)
+        assertEquals(915.125, requireNotNull(bodyConfig["freq"]?.jsonPrimitive?.doubleOrNull), 0.0)
     }
 
     @Test
@@ -129,5 +131,52 @@ class E220ProtocolTest {
         """.trimIndent()
 
         assertEquals("[TX] hello\n[RX] hi", E220Protocol.parseDebugLog(response))
+    }
+
+    @Test
+    fun `parse config response accepts nested data config object`() {
+        val response = """
+            {
+              "ok": true,
+              "data": {
+                "config": {
+                  "freq": 930.125,
+                  "txpower": 30,
+                  "baud": 9600,
+                  "addr": "0x0001",
+                  "dest": "0xFFFF",
+                  "airrate": 2,
+                  "wor_cycle": 3
+                }
+              }
+            }
+        """.trimIndent()
+
+        val config = E220Protocol.parseConfigResponse(response)
+
+        assertEquals("930.125", config.freq)
+        assertEquals("30", config.txpower)
+        assertEquals("0x0001", config.addr)
+    }
+
+    @Test
+    fun `parse config response accepts flat web config object`() {
+        val response = """
+            {
+              "config": {
+                "freq": 915.125,
+                "txpower": 27,
+                "baud": 19200,
+                "addr": "0x0002"
+              }
+            }
+        """.trimIndent()
+
+        val config = E220Protocol.parseConfigResponse(response)
+
+        assertEquals("915.125", config.freq)
+        assertEquals("27", config.txpower)
+        assertEquals("19200", config.baud)
+        assertEquals("0x0002", config.addr)
     }
 }
