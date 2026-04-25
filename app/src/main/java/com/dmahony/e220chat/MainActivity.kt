@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
@@ -32,7 +31,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.FlowRow
@@ -72,25 +70,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             E220ChatTheme(darkTheme = vm.darkTheme) {
-                val terminalBackdrop = Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF081018),
-                        MaterialTheme.colorScheme.background,
-                        Color(0xFF0D1720),
-                        Color(0xFF081018)
-                    )
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(terminalBackdrop)
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
                 ) {
-                    Surface(
-                        modifier = Modifier.fillMaxSize(),
-                        color = Color.Transparent
-                    ) {
-                        E220ChatRoot(vm)
-                    }
+                    E220ChatRoot(vm)
                 }
             }
         }
@@ -338,7 +322,7 @@ private fun ChatScreen(
                 Box(
                     modifier = Modifier
                         .weight(1f)
-                        .height(52.dp)
+                        .height(48.dp)
                 ) {
                     OutlinedTextField(
                         value = draft,
@@ -350,7 +334,12 @@ private fun ChatScreen(
                             .fillMaxSize()
                             .onFocusChanged { composerFocused = it.isFocused },
                         placeholder = {
-                            Text(if (connected) "Message" else "Connect BLE to chat")
+                            Text(
+                                text = if (connected) "Message" else "Connect BLE to chat",
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         },
                         textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
                         singleLine = true,
@@ -659,12 +648,12 @@ private fun MessageBubble(message: ChatMessage) {
         horizontalArrangement = if (message.sent) Arrangement.End else Arrangement.Start
     ) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val bubbleMaxWidth = maxWidth * 0.82f
+            val bubbleMaxWidth = maxWidth * 0.85f
             Surface(
                 shape = if (message.sent) {
-                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 14.dp, bottomEnd = 8.dp)
+                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 4.dp)
                 } else {
-                    RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomStart = 8.dp, bottomEnd = 14.dp)
+                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 4.dp, bottomEnd = 20.dp)
                 },
                 color = if (message.sent) {
                     MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.96f)
@@ -687,7 +676,7 @@ private fun MessageBubble(message: ChatMessage) {
                     .align(if (message.sent) Alignment.CenterEnd else Alignment.CenterStart)
             ) {
                 Column(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     ClickableText(

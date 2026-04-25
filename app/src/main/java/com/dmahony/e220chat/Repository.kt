@@ -1,5 +1,6 @@
 package com.dmahony.e220chat
 
+import android.annotation.SuppressLint
 import android.Manifest
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
@@ -97,6 +98,7 @@ class E220Repository(context: Context) {
             true
     }
 
+    @SuppressLint("MissingPermission")
     suspend fun scanBleDevices(scanMillis: Long = 10000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
         if (!hasBluetoothScanPermission()) {
             Log.w(tag, "Skipping BLE scan until Bluetooth permissions are granted")
@@ -190,6 +192,7 @@ class E220Repository(context: Context) {
         discovered
     }
 
+    @SuppressLint("MissingPermission")
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
             if (!hasBluetoothConnectPermission()) {
@@ -373,6 +376,7 @@ class E220Repository(context: Context) {
         runBlockingConnect(address)
     }
 
+    @SuppressLint("MissingPermission")
     private suspend fun runBlockingConnect(address: String) {
         val device = adapter?.getRemoteDevice(address)
             ?: throw ApiException("Bluetooth LE is not available on this device")

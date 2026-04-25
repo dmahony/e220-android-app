@@ -1,5 +1,6 @@
 package com.dmahony.e220chat
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Location
 import android.location.LocationManager
@@ -11,6 +12,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
+@SuppressLint("MissingPermission")
 suspend fun resolveCurrentLocation(context: Context): Location? = withContext(Dispatchers.Main) {
     val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
