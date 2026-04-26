@@ -28,6 +28,7 @@ import com.dmahony.e220chat.ble.BleUartManager
 import com.dmahony.e220chat.ble.FlowState
 import com.dmahony.e220chat.ble.MsgType
 import com.dmahony.e220chat.ble.StatusTelemetry
+import com.dmahony.e220chat.ble.TextPacket
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -856,9 +857,21 @@ class E220Repository(context: Context) {
 
     private fun mapBleConfigToLegacy(cfg: BleConfig): E220Config {
         return E220Config(
-            lbrTimeout = cfg.ackTimeoutMs.toString(),
+            freq = cfg.channel.toString(),
+            txpower = cfg.txpower.toString(),
+            baud = cfg.baud.toString(),
+            parity = cfg.parity.toString(),
+            airrate = cfg.airrate.toString(),
+            txmode = cfg.txmode.toString(),
+            lbt = cfg.lbt.toString(),
+            subpkt = cfg.subpkt.toString(),
+            rssiNoise = cfg.rssiNoise.toString(),
+            rssiByte = cfg.rssiByte.toString(),
             urxt = cfg.maxRetries.toString(),
             worCycle = cfg.radioTxIntervalMs.toString(),
+            cryptH = cfg.cryptH.toString(),
+            cryptL = cfg.cryptL.toString(),
+            lbrTimeout = cfg.ackTimeoutMs.toString(),
             lbrRssi = cfg.statusIntervalMs.toString(),
             saveType = cfg.profileIntervalSec.toString(),
             addr = "0x${cfg.userId24.toString(16).padStart(6, '0').uppercase()}",
@@ -878,7 +891,30 @@ class E220Repository(context: Context) {
             statusIntervalMs = config.lbrRssi.toIntOrNull()?.coerceIn(200, 5000) ?: current.statusIntervalMs,
             profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
             userId24 = userId,
-            username = username
+            username = username,
+            channel = config.freq.split(" ").first().toDoubleOrNull()?.toInt() ?: current.channel,
+            txpower = config.txpower.toIntOrNull() ?: current.txpower,
+            baud = config.baud.toIntOrNull() ?: current.baud,
+            parity = config.parity.toIntOrNull() ?: current.parity,
+            airrate = config.airrate.toIntOrNull() ?: current.airrate,
+            txmode = config.txmode.toIntOrNull() ?: current.txmode,
+            lbt = config.lbt.toIntOrNull() ?: current.lbt,
+            subpkt = config.subpkt.toIntOrNull() ?: current.subpkt,
+            rssiNoise = config.rssiNoise.toIntOrNull() ?: current.rssiNoise,
+            rssiByte = config.rssiByte.toIntOrNull() ?: current.rssiByte,
+            urxt = config.urxt.toIntOrNull() ?: current.urxt,
+            worCycle = config.worCycle.toIntOrNull() ?: current.worCycle,
+            cryptH = config.cryptH.toIntOrNull() ?: current.cryptH,
+            cryptL = config.cryptL.toIntOrNull() ?: current.cryptL,
+            saveType = config.saveType.toIntOrNull() ?: current.saveType,
+            addr = config.addr.removePrefix("0x").removePrefix("0X").toIntOrNull(16) ?: current.addr,
+            dest = config.dest.removePrefix("0x").removePrefix("0X").toIntOrNull(16) ?: current.dest,
+            wifiEnabled = config.wifiEnabled.toIntOrNull() ?: current.wifiEnabled,
+            wifiMode = config.wifiMode.toIntOrNull() ?: current.wifiMode,
+            wifiApSsid = config.wifiApSsid,
+            wifiApPassword = config.wifiApPassword,
+            wifiStaSsid = config.wifiStaSsid,
+            wifiStaPassword = config.wifiStaPassword
         )
     }
 

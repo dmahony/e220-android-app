@@ -45,11 +45,44 @@ data class BleConfig(
     val statusIntervalMs: Int = 1000,
     val profileIntervalSec: Int = 900,
     val userId24: Int,
-    val username: String
+    val username: String,
+    val channel: Int = 0,
+    val txpower: Int = 0,
+    val baud: Int = 0,
+    val parity: Int = 0,
+    val airrate: Int = 0,
+    val txmode: Int = 0,
+    val lbt: Int = 0,
+    val subpkt: Int = 0,
+    val rssiNoise: Int = 0,
+    val rssiByte: Int = 0,
+    val urxt: Int = 0,
+    val worCycle: Int = 0,
+    val cryptH: Int = 0,
+    val cryptL: Int = 0,
+    val saveType: Int = 0,
+    val addr: Int = 0,
+    val dest: Int = 0,
+    val wifiEnabled: Int = 0,
+    val wifiMode: Int = 0,
+    val wifiApSsid: String = "",
+    val wifiApPassword: String = "",
+    val wifiStaSsid: String = "",
+    val wifiStaPassword: String = ""
 ) {
     fun toPayload(): ByteArray {
         val nameBytes = username.toByteArray(Charsets.UTF_8).take(19).toByteArray()
-        val out = ByteArray(13 + nameBytes.size)
+        val apSsidBytes = wifiApSsid.toByteArray(Charsets.UTF_8).take(31).toByteArray()
+        val apPwdBytes = wifiApPassword.toByteArray(Charsets.UTF_8).take(31).toByteArray()
+        val staSsidBytes = wifiStaSsid.toByteArray(Charsets.UTF_8).take(31).toByteArray()
+        val staPwdBytes = wifiStaPassword.toByteArray(Charsets.UTF_8).take(31).toByteArray()
+
+        val fixedSize = 33
+        val totalSize = fixedSize + nameBytes.size + 
+                       (1 + apSsidBytes.size) + (1 + apPwdBytes.size) + 
+                       (1 + staSsidBytes.size) + (1 + staPwdBytes.size)
+        
+        val out = ByteArray(totalSize)
         var i = 0
         out[i++] = ((ackTimeoutMs ushr 8) and 0xFF).toByte()
         out[i++] = (ackTimeoutMs and 0xFF).toByte()
@@ -63,22 +96,94 @@ data class BleConfig(
         out[i++] = ((userId24 ushr 16) and 0xFF).toByte()
         out[i++] = ((userId24 ushr 8) and 0xFF).toByte()
         out[i++] = (userId24 and 0xFF).toByte()
+        out[i++] = channel.toByte()
+        out[i++] = txpower.toByte()
+        out[i++] = baud.toByte()
+        out[i++] = parity.toByte()
+        out[i++] = airrate.toByte()
+        out[i++] = txmode.toByte()
+        out[i++] = lbt.toByte()
+        out[i++] = subpkt.toByte()
+        out[i++] = rssiNoise.toByte()
+        out[i++] = rssiByte.toByte()
+        out[i++] = urxt.toByte()
+        out[i++] = worCycle.toByte()
+        out[i++] = cryptH.toByte()
+        out[i++] = cryptL.toByte()
+        out[i++] = saveType.toByte()
+        out[i++] = ((addr ushr 8) and 0xFF).toByte()
+        out[i++] = (addr and 0xFF).toByte()
+        out[i++] = ((dest ushr 8) and 0xFF).toByte()
+        out[i++] = (dest and 0xFF).toByte()
+        out[i++] = wifiEnabled.toByte()
+        out[i++] = wifiMode.toByte()
         out[i++] = nameBytes.size.toByte()
         nameBytes.copyInto(out, i)
+        i += nameBytes.size
+        
+        out[i++] = apSsidBytes.size.toByte()
+        apSsidBytes.copyInto(out, i)
+        i += apSsidBytes.size
+        
+        out[i++] = apPwdBytes.size.toByte()
+        apPwdBytes.copyInto(out, i)
+        i += apPwdBytes.size
+        
+        out[i++] = staSsidBytes.size.toByte()
+        staSsidBytes.copyInto(out, i)
+        i += staSsidBytes.size
+        
+        out[i++] = staPwdBytes.size.toByte()
+        staPwdBytes.copyInto(out, i)
+        
         return out
     }
 
     companion object {
         fun fromPayload(bytes: ByteArray): BleConfig {
-            require(bytes.size >= 13) { "CONFIG payload too short" }
-            val ackTimeoutMs = ((bytes[0].toInt() and 0xFF) shl 8) or (bytes[1].toInt() and 0xFF)
-            val maxRetries = bytes[2].toInt() and 0xFF
-            val radioTxIntervalMs = ((bytes[3].toInt() and 0xFF) shl 8) or (bytes[4].toInt() and 0xFF)
-            val statusIntervalMs = ((bytes[5].toInt() and 0xFF) shl 8) or (bytes[6].toInt() and 0xFF)
-            val profileIntervalSec = ((bytes[7].toInt() and 0xFF) shl 8) or (bytes[8].toInt() and 0xFF)
-            val userId24 = ((bytes[9].toInt() and 0xFF) shl 16) or ((bytes[10].toInt() and 0xFF) shl 8) or (bytes[11].toInt() and 0xFF)
-            val nameLen = (bytes[12].toInt() and 0xFF).coerceAtMost(bytes.size - 13)
-            val username = if (nameLen > 0) bytes.copyOfRange(13, 13 + nameLen).toString(Charsets.UTF_8) else ""
+            require(bytes.size >= 33) { "CONFIG payload too short" }
+            var i = 0
+            val ackTimeoutMs = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val maxRetries = bytes[i++].toInt() and 0xFF
+            val radioTxIntervalMs = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val statusIntervalMs = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val profileIntervalSec = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val userId24 = ((bytes[i++].toInt() and 0xFF) shl 16) or ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val channel = bytes[i++].toInt() and 0xFF
+            val txpower = bytes[i++].toInt() and 0xFF
+            val baud = bytes[i++].toInt() and 0xFF
+            val parity = bytes[i++].toInt() and 0xFF
+            val airrate = bytes[i++].toInt() and 0xFF
+            val txmode = bytes[i++].toInt() and 0xFF
+            val lbt = bytes[i++].toInt() and 0xFF
+            val subpkt = bytes[i++].toInt() and 0xFF
+            val rssiNoise = bytes[i++].toInt() and 0xFF
+            val rssiByte = bytes[i++].toInt() and 0xFF
+            val urxt = bytes[i++].toInt() and 0xFF
+            val worCycle = bytes[i++].toInt() and 0xFF
+            val cryptH = bytes[i++].toInt() and 0xFF
+            val cryptL = bytes[i++].toInt() and 0xFF
+            val saveType = bytes[i++].toInt() and 0xFF
+            val addr = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val dest = ((bytes[i++].toInt() and 0xFF) shl 8) or (bytes[i++].toInt() and 0xFF)
+            val wifiEnabled = bytes[i++].toInt() and 0xFF
+            val wifiMode = bytes[i++].toInt() and 0xFF
+            
+            val nameLen = bytes[i++].toInt() and 0xFF
+            val username = if (i + nameLen <= bytes.size) bytes.copyOfRange(i, i + nameLen).toString(Charsets.UTF_8) else ""
+            i += nameLen
+            
+            fun readString(): String {
+                if (i >= bytes.size) return ""
+                val len = bytes[i++].toInt() and 0xFF
+                return if (i + len <= bytes.size) bytes.copyOfRange(i, i + len).toString(Charsets.UTF_8).also { i += len } else ""
+            }
+            
+            val wifiApSsid = readString()
+            val wifiApPassword = readString()
+            val wifiStaSsid = readString()
+            val wifiStaPassword = readString()
+            
             return BleConfig(
                 ackTimeoutMs = ackTimeoutMs,
                 maxRetries = maxRetries,
@@ -86,11 +191,35 @@ data class BleConfig(
                 statusIntervalMs = statusIntervalMs,
                 profileIntervalSec = profileIntervalSec,
                 userId24 = userId24,
-                username = username
+                username = username,
+                channel = channel,
+                txpower = txpower,
+                baud = baud,
+                parity = parity,
+                airrate = airrate,
+                txmode = txmode,
+                lbt = lbt,
+                subpkt = subpkt,
+                rssiNoise = rssiNoise,
+                rssiByte = rssiByte,
+                urxt = urxt,
+                worCycle = worCycle,
+                cryptH = cryptH,
+                cryptL = cryptL,
+                saveType = saveType,
+                addr = addr,
+                dest = dest,
+                wifiEnabled = wifiEnabled,
+                wifiMode = wifiMode,
+                wifiApSsid = wifiApSsid,
+                wifiApPassword = wifiApPassword,
+                wifiStaSsid = wifiStaSsid,
+                wifiStaPassword = wifiStaPassword
             )
         }
     }
 }
+
 
 data class StatusTelemetry(
     val flowState: FlowState,
