@@ -14,7 +14,8 @@ enum class AppTab(val label: String) {
 @Serializable
 enum class SlashCommand(val label: String, val description: String) {
     GPS("/gps", "Get phone GPS location and post to chat"),
-    CLEAR("/clear", "Clear sent and received messages")
+    CLEAR("/clear", "Clear sent and received messages"),
+    NAME("/name", "Set your username (e.g. /name Alice)")
 }
 
 @Serializable

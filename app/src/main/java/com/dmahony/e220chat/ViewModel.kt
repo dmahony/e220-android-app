@@ -56,7 +56,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     var diagnosticsError by mutableStateOf<String?>(null)
         private set
 
-    var wifiStatus by mutableStateOf(WifiStatus())
+    var wifiStatus by mutableStateOf(WifiStatus(enabled = false))
         private set
     var wifiNetworks by mutableStateOf(listOf<WifiNetwork>())
         private set
@@ -769,6 +769,27 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     onError(e.message ?: "WiFi disconnect failed")
                 }
                 syncTransportLogs()
+            }
+        }
+    }
+
+    fun setUsername(name: String, onError: (String) -> Unit, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                if (!repo.isConnected) {
+                    onError("Connect to BLE first")
+                    return@launch
+                }
+                val updatedConfig = repo.saveConfig(repo.getConfig().copy(wifiApSsid = name))
+                config = updatedConfig
+                configStatus = "Username updated to $name"
+                syncTransportLogs()
+                onSuccess()
+            } catch (e: Exception) {
+                val msg = e.message ?: "Failed to update username"
+                configError = msg
+                syncTransportLogs()
+                onError(msg)
             }
         }
     }

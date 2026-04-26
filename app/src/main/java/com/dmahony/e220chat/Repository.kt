@@ -22,6 +22,12 @@ import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.dmahony.e220chat.ble.BleConfig
+import com.dmahony.e220chat.ble.BleFrame
+import com.dmahony.e220chat.ble.BleUartManager
+import com.dmahony.e220chat.ble.FlowState
+import com.dmahony.e220chat.ble.MsgType
+import com.dmahony.e220chat.ble.StatusTelemetry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +36,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -66,7 +73,52 @@ class E220Repository(context: Context) {
     private var activeScanScanner: BluetoothLeScanner? = null
     private var activeScanCallback: ScanCallback? = null
 
+    private val bleV2 = BleUartManager(appContext)
+    private val useBinaryTransport = true
+    private val binaryChatMessages = mutableListOf<ChatMessage>()
+    private var binaryChatSequence = 0
+    private var binaryChatReset = false
+    private var binaryConfig: BleConfig? = null
+    private var binaryStatus: StatusTelemetry? = null
+    private var lastBinaryConnected = false
+
     var connectionEventListener: ((TransportConnectionEvent) -> Unit)? = null
+
+    init {
+        recoveryScope.launch {
+            bleV2.connected.collect { connected ->
+                if (connected == lastBinaryConnected) return@collect
+                lastBinaryConnected = connected
+                if (connected) {
+                    appendTransportLog(TransportDirection.INFO, "BLE connected")
+                    connectionEventListener?.invoke(
+                        TransportConnectionEvent(
+                            state = TransportConnectionState.CONNECTED,
+                            message = "Bluetooth connected"
+                        )
+                    )
+                } else if (!manualDisconnectRequested && selectedDeviceAddress != null) {
+                    appendTransportLog(TransportDirection.INFO, "BLE link lost, reconnecting")
+                    connectionEventListener?.invoke(
+                        TransportConnectionEvent(
+                            state = TransportConnectionState.RECONNECTING,
+                            message = "Bluetooth link lost, reconnecting..."
+                        )
+                    )
+                }
+            }
+        }
+        recoveryScope.launch {
+            bleV2.status.collect { st ->
+                binaryStatus = st
+            }
+        }
+        recoveryScope.launch {
+            bleV2.frames.collect { frame ->
+                handleBinaryFrame(frame)
+            }
+        }
+    }
 
     var darkTheme: Boolean
         get() = prefs.getBoolean(KEY_DARK_THEME, true)
@@ -91,7 +143,7 @@ class E220Repository(context: Context) {
         }
 
     val isConnected: Boolean
-        get() = bluetoothGatt != null && rxCharacteristic != null && txCharacteristic != null
+        get() = if (useBinaryTransport) bleV2.connected.value else (bluetoothGatt != null && rxCharacteristic != null && txCharacteristic != null)
 
     fun getPairedDevices(): List<BluetoothDeviceInfo> = cachedDevices
 
@@ -234,6 +286,36 @@ class E220Repository(context: Context) {
 
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
+        if (useBinaryTransport) {
+            if (!hasBluetoothConnectPermission()) {
+                throw ApiException("Grant Bluetooth permissions first")
+            }
+            val device = adapter?.getRemoteDevice(address)
+                ?: throw ApiException("Bluetooth LE is not available on this device")
+            val name = device.name ?: device.address
+            selectedDeviceAddress = address
+            selectedDeviceName = name
+            manualDisconnectRequested = false
+            appendTransportLog(TransportDirection.INFO, "Connecting to $name")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.CONNECTING,
+                    message = "Connecting to $name..."
+                )
+            )
+            bleV2.connect(address)
+            appendTransportLog(TransportDirection.INFO, "Connected to $name")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.CONNECTED,
+                    message = "Connected to $name"
+                )
+            )
+            runCatching { bleV2.requestWhois() }
+            runCatching { binaryConfig = bleV2.readConfigCharacteristic() }
+            return@withContext BluetoothDeviceInfo(name = name, address = address)
+        }
+
         exchangeMutex.withLock {
             manualDisconnectRequested = false
             reconnectJob?.cancel()
@@ -250,6 +332,20 @@ class E220Repository(context: Context) {
     }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
+        if (useBinaryTransport) {
+            manualDisconnectRequested = true
+            bleV2.disconnect()
+            appendTransportLog(TransportDirection.INFO, "Disconnected")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.DISCONNECTED,
+                    message = "Bluetooth disconnected",
+                    manualDisconnect = true
+                )
+            )
+            return@withContext
+        }
+
         exchangeMutex.withLock {
             manualDisconnectRequested = true
             reconnectJob?.cancel()
@@ -266,20 +362,69 @@ class E220Repository(context: Context) {
         }
     }
 
-    suspend fun getChat(sinceSequence: Int = 0): ChatSnapshot = E220Protocol.parseChatResponse(exchange(E220Protocol.buildChatRequest(sinceSequence)))
+    suspend fun getChat(sinceSequence: Int = 0): ChatSnapshot {
+        if (useBinaryTransport) {
+            val reset = binaryChatReset
+            binaryChatReset = false
+            val outMessages = synchronized(binaryChatMessages) {
+                if (sinceSequence <= 0 || reset) {
+                    binaryChatMessages.toList()
+                } else if (sinceSequence < binaryChatSequence) {
+                    val from = sinceSequence.coerceAtLeast(0)
+                    if (from >= binaryChatMessages.size) emptyList() else binaryChatMessages.subList(from, binaryChatMessages.size).toList()
+                } else {
+                    emptyList()
+                }
+            }
+            return ChatSnapshot(sequence = binaryChatSequence, messages = outMessages, reset = reset)
+        }
+        return E220Protocol.parseChatResponse(exchange(E220Protocol.buildChatRequest(sinceSequence)))
+    }
 
     suspend fun clearChatHistory() {
+        if (useBinaryTransport) {
+            synchronized(binaryChatMessages) {
+                binaryChatMessages.clear()
+                binaryChatReset = true
+                binaryChatSequence = 0
+            }
+            return
+        }
         exchange(E220Protocol.buildClearChatRequest())
     }
 
     suspend fun sendMessage(message: String): String {
+        if (useBinaryTransport) {
+            val destination = parseDestinationUserId()
+            bleV2.sendText(destination, message)
+            synchronized(binaryChatMessages) {
+                binaryChatMessages.add(ChatMessage(text = message, sent = true, delivered = true))
+                binaryChatSequence = binaryChatMessages.size
+            }
+            appendTransportLog(TransportDirection.SENT, "TEXT dst=${destination.toString(16).padStart(6, '0')} len=${message.length}")
+            return "queued"
+        }
         val response = exchange(E220Protocol.buildSendRequest(message))
         return E220Protocol.parseSendAcknowledgement(response)
     }
 
-    suspend fun getConfig(): E220Config = E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigGetRequest()))
+    suspend fun getConfig(): E220Config {
+        if (useBinaryTransport) {
+            val cfg = runCatching { bleV2.readConfigCharacteristic() }.getOrElse { binaryConfig } ?: defaultBinaryConfig()
+            binaryConfig = cfg
+            return mapBleConfigToLegacy(cfg)
+        }
+        return E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigGetRequest()))
+    }
 
     suspend fun saveConfig(config: E220Config): E220Config = withContext(Dispatchers.IO) {
+        if (useBinaryTransport) {
+            val cfg = mapLegacyConfigToBle(config)
+            bleV2.writeConfig(cfg)
+            binaryConfig = cfg
+            return@withContext mapBleConfigToLegacy(cfg)
+        }
+
         val response = exchange(E220Protocol.buildConfigRequest(config))
         if (E220Protocol.hasConfigPayload(response)) {
             return@withContext E220Protocol.parseConfigResponse(response)
@@ -298,21 +443,61 @@ class E220Repository(context: Context) {
         getConfig()
     }
 
-    suspend fun getOperation(): OperationStatus = E220Protocol.parseOperationResponse(exchange(E220Protocol.buildOperationRequest()))
+    suspend fun getOperation(): OperationStatus {
+        if (useBinaryTransport) {
+            val st = binaryStatus
+            val msg = when (st?.flowState) {
+                FlowState.BUSY -> "busy"
+                FlowState.TX_IN_PROGRESS -> "tx_in_progress"
+                FlowState.TX_DONE -> "tx_done"
+                FlowState.TX_FAILED -> "tx_failed"
+                else -> "ready"
+            }
+            return OperationStatus(type = "ble_v2", state = "idle", message = msg, updatedAtMs = System.currentTimeMillis(), rawResult = "{}")
+        }
+        return E220Protocol.parseOperationResponse(exchange(E220Protocol.buildOperationRequest()))
+    }
 
     suspend fun reboot() {
+        if (useBinaryTransport) {
+            throw ApiException("Reboot API is not supported by BLE v2 firmware")
+        }
         exchange(E220Protocol.buildRebootRequest())
     }
 
-    suspend fun getDiagnostics(): Diagnostics = E220Protocol.parseDiagnosticsResponse(exchange(E220Protocol.buildDiagnosticsRequest()))
+    suspend fun getDiagnostics(): Diagnostics {
+        if (useBinaryTransport) {
+            val st = binaryStatus
+            return Diagnostics(
+                e220Timeouts = 0,
+                e220RxErrors = 0,
+                e220TxErrors = if (st?.flowState == FlowState.TX_FAILED) 1 else 0,
+                uptimeMs = (st?.uptimeSec ?: 0L) * 1000L,
+                freeHeap = 0,
+                minFreeHeap = 0,
+                btName = selectedDeviceName.orEmpty(),
+                btHasClient = isConnected,
+                btRequestCount = binaryChatSequence,
+                btParseErrors = 0,
+                btRawMessageCount = binaryChatSequence,
+                lastRssi = st?.lastRssi ?: 0
+            )
+        }
+        return E220Protocol.parseDiagnosticsResponse(exchange(E220Protocol.buildDiagnosticsRequest()))
+    }
     
-    suspend fun getWifiStatus(): WifiStatus = E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiGetRequest()))
+    suspend fun getWifiStatus(): WifiStatus {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
+        return E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiGetRequest()))
+    }
 
-    suspend fun setWifiEnabled(enabled: Boolean): WifiStatus = E220Protocol.parseWifiStatus(
-        exchange(E220Protocol.buildWifiToggleRequest(enabled))
-    )
+    suspend fun setWifiEnabled(enabled: Boolean): WifiStatus {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
+        return E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiToggleRequest(enabled)))
+    }
 
     suspend fun scanWifi(): WifiScanResult = withContext(Dispatchers.IO) {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
         exchangeMutex.withLock {
             ensureConnectedLocked()
             executeExchangeLocked(E220Protocol.buildWifiScanRequest())
@@ -334,20 +519,30 @@ class E220Repository(context: Context) {
     }
 
     suspend fun connectWifi(ssid: String, password: String) {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
         exchange(E220Protocol.buildWifiConnectRequest(ssid, password))
     }
 
     suspend fun disconnectWifi() {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
         exchange(E220Protocol.buildWifiDisconnectRequest())
     }
 
     suspend fun setWifiAp(password: String) {
+        if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
         exchange(E220Protocol.buildWifiApRequest(password))
     }
 
-    suspend fun getDebug(): String = E220Protocol.parseDebugLog(exchange(E220Protocol.buildDebugRequest()))
+    suspend fun getDebug(): String {
+        if (useBinaryTransport) {
+            val st = binaryStatus
+            return "BLE v2 connected=$isConnected flow=${st?.flowState} batteryMv=${st?.batteryMv} rssi=${st?.lastRssi} qBleRx=${st?.qBleRx} qBleTx=${st?.qBleTx} qRadioTx=${st?.qRadioTx} qRadioRx=${st?.qRadioRx}"
+        }
+        return E220Protocol.parseDebugLog(exchange(E220Protocol.buildDebugRequest()))
+    }
 
     suspend fun clearDebug() {
+        if (useBinaryTransport) return
         exchange(E220Protocol.buildDebugClearRequest())
     }
 
@@ -646,6 +841,85 @@ class E220Repository(context: Context) {
         Log.d(tag, "[$prefix] $payload")
     }
 
+    private fun parseDestinationUserId(): Int {
+        val cfg = binaryConfig ?: defaultBinaryConfig()
+        return cfg.userId24
+    }
+
+    private fun defaultBinaryConfig(): BleConfig {
+        val address = selectedDeviceAddress.orEmpty().replace(":", "")
+        val suffix = if (address.length >= 6) address.takeLast(6) else "000001"
+        val id = suffix.toIntOrNull(16)?.coerceIn(1, 0xFFFFFF) ?: 1
+        val user = "u${suffix.uppercase()}".take(19)
+        return BleConfig(userId24 = id, username = user)
+    }
+
+    private fun mapBleConfigToLegacy(cfg: BleConfig): E220Config {
+        return E220Config(
+            lbrTimeout = cfg.ackTimeoutMs.toString(),
+            urxt = cfg.maxRetries.toString(),
+            worCycle = cfg.radioTxIntervalMs.toString(),
+            lbrRssi = cfg.statusIntervalMs.toString(),
+            saveType = cfg.profileIntervalSec.toString(),
+            addr = "0x${cfg.userId24.toString(16).padStart(6, '0').uppercase()}",
+            dest = "0xFFFFFF"
+        )
+    }
+
+    private fun mapLegacyConfigToBle(config: E220Config): BleConfig {
+        val current = binaryConfig ?: defaultBinaryConfig()
+        val userId = config.addr.removePrefix("0x").removePrefix("0X").toIntOrNull(16)?.coerceIn(1, 0xFFFFFF)
+            ?: current.userId24
+        val username = (config.wifiApSsid.ifBlank { current.username }).take(19)
+        return BleConfig(
+            ackTimeoutMs = config.lbrTimeout.toIntOrNull()?.coerceIn(60, 2000) ?: current.ackTimeoutMs,
+            maxRetries = config.urxt.toIntOrNull()?.coerceIn(1, 10) ?: current.maxRetries,
+            radioTxIntervalMs = config.worCycle.toIntOrNull()?.coerceIn(20, 2000) ?: current.radioTxIntervalMs,
+            statusIntervalMs = config.lbrRssi.toIntOrNull()?.coerceIn(200, 5000) ?: current.statusIntervalMs,
+            profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
+            userId24 = userId,
+            username = username
+        )
+    }
+
+    private fun handleBinaryFrame(frame: BleFrame) {
+        when (frame.type) {
+            MsgType.TEXT -> {
+                if (frame.payload.size >= 3) {
+                    val userId = ((frame.payload[0].toInt() and 0xFF) shl 16) or
+                        ((frame.payload[1].toInt() and 0xFF) shl 8) or
+                        (frame.payload[2].toInt() and 0xFF)
+                    val text = frame.payload.copyOfRange(3, frame.payload.size).toString(Charsets.UTF_8)
+                    synchronized(binaryChatMessages) {
+                        binaryChatMessages.add(ChatMessage(text = "[RX ${userId.toString(16).padStart(6, '0')}] $text", sent = false, delivered = true))
+                        binaryChatSequence = binaryChatMessages.size
+                    }
+                    appendTransportLog(TransportDirection.RECEIVED, "TEXT src=${userId.toString(16).padStart(6, '0')} len=${text.length}")
+                }
+            }
+            MsgType.PROFILE -> {
+                appendTransportLog(TransportDirection.RECEIVED, "PROFILE len=${frame.payload.size}")
+            }
+            MsgType.CONFIG -> {
+                runCatching { BleConfig.fromPayload(frame.payload) }.onSuccess { cfg ->
+                    binaryConfig = cfg
+                    appendTransportLog(TransportDirection.RECEIVED, "CONFIG ackTimeout=${cfg.ackTimeoutMs} retries=${cfg.maxRetries}")
+                }
+            }
+            MsgType.ERROR -> {
+                val code = frame.payload.getOrNull(0)?.toInt()?.and(0xFF) ?: -1
+                val origin = frame.payload.getOrNull(1)?.toInt()?.and(0xFF) ?: -1
+                appendTransportLog(TransportDirection.INFO, "BLE error code=$code originType=$origin")
+            }
+            MsgType.STATUS -> {
+                runCatching { StatusTelemetry.fromPayload(frame.payload) }.onSuccess { st ->
+                    binaryStatus = st
+                }
+            }
+            MsgType.ACK, MsgType.WHOIS -> Unit
+        }
+    }
+
     private fun handleIncomingChunk(chunk: String) {
         val completeLine: String? = synchronized(stateLock) {
             if (pendingResponse == null) return
@@ -777,10 +1051,10 @@ class E220Repository(context: Context) {
         private const val AUTO_RECONNECT_WAIT_MS = 10000L
         private const val AUTO_RECONNECT_BACKOFF_MS = 1200L
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5
-        private const val BLE_NAME_PREFIX = "E220-Chat-"
-        private val NUS_SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
-        private val NUS_RX_UUID: UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
-        private val NUS_TX_UUID: UUID = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E")
+        private const val BLE_NAME_PREFIX = "E220-BLE-"
+        private val NUS_SERVICE_UUID: UUID = UUID.fromString("9f6d0001-6f52-4d94-b43f-2ef6f3ed7a10")
+        private val NUS_RX_UUID: UUID = UUID.fromString("9f6d0002-6f52-4d94-b43f-2ef6f3ed7a10")
+        private val NUS_TX_UUID: UUID = UUID.fromString("9f6d0003-6f52-4d94-b43f-2ef6f3ed7a10")
         private val CLIENT_CONFIG_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805F9B34FB")
     }
 }

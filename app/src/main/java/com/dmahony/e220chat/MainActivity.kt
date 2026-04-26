@@ -276,6 +276,7 @@ private fun ChatScreen(
     onClearMessages: () -> Unit,
     onError: (String) -> Unit
 ) {
+    val context = LocalContext.current
     var draft by remember { mutableStateOf("") }
     var composerFocused by remember { mutableStateOf(false) }
     val slashCommandQuery = remember(draft) { draft }
@@ -437,6 +438,17 @@ private fun ChatScreen(
                                     when (command) {
                                         SlashCommand.GPS -> onGpsCommand()
                                         SlashCommand.CLEAR -> onClearMessages()
+                                        SlashCommand.NAME -> {
+                                            val name = draft.removePrefix("/name").trim()
+                                            if (name.isEmpty()) {
+                                                Toast.makeText(context, "Please provide a name: /name Alice", Toast.LENGTH_SHORT).show()
+                                            } else {
+                                                vm.setUsername(name, 
+                                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, 
+                                                    onSuccess = { Toast.makeText(context, "Username set to $name", Toast.LENGTH_SHORT).show() }
+                                                )
+                                            }
+                                        }
                                     }
                                     draft = ""
                                     composerFocused = false

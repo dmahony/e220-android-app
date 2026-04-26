@@ -1,8 +1,8 @@
 1<?xml version="1.0" encoding="utf-8"?>
 2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
 3    package="com.dmahony.e220chat"
-4    android:versionCode="1034"
-5    android:versionName="0.1.0-dev.34+ef2cb7bb" >
+4    android:versionCode="1036"
+5    android:versionName="0.1.0-dev.36+d5aab53c" >
 6
 7    <uses-sdk
 8        android:minSdkVersion="26"

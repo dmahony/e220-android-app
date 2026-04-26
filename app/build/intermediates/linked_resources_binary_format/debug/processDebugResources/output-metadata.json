@@ -11,8 +11,8 @@
       "type": "SINGLE",
       "filters": [],
       "attributes": [],
-      "versionCode": 1034,
-      "versionName": "0.1.0-dev.34+ef2cb7bb",
+      "versionCode": 1036,
+      "versionName": "0.1.0-dev.36+d5aab53c",
       "outputFile": "linked-resources-binary-format-debug.ap_"
     }
   ],
