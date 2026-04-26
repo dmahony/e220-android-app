@@ -59,6 +59,15 @@ class E220ProtocolTest {
     }
 
     @Test
+    fun `build clear chat request posts to chat clear endpoint`() {
+        val request = E220Protocol.buildClearChatRequest()
+        val envelope = json.parseToJsonElement(request).jsonObject
+
+        assertEquals("/api/chat/clear", envelope["path"]?.jsonPrimitive?.content)
+        assertEquals("POST", envelope["method"]?.jsonPrimitive?.content)
+    }
+
+    @Test
     fun `parse chat response reads nested data messages and marks sent ones delivered`() {
         val response = """
             {

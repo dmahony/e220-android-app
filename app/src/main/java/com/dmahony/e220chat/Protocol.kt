@@ -15,6 +15,8 @@ import kotlinx.serialization.json.putJsonObject
 object E220Protocol {
     fun buildChatRequest(): String = request("/api/chat", "GET")
 
+    fun buildClearChatRequest(): String = request("/api/chat/clear", "POST")
+
     fun buildSendRequest(message: String): String = request("/api/send", "POST") {
         put("message", message)
         putJsonObject("body") { put("message", message) }

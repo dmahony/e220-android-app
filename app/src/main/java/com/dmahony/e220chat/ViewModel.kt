@@ -233,6 +233,15 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     fun clearChatMessages() {
         chatMessages = emptyList()
         chatError = null
+        viewModelScope.launch {
+            try {
+                if (repo.isConnected) {
+                    repo.clearChatHistory()
+                }
+            } catch (e: Exception) {
+                chatError = e.message ?: "Chat clear failed"
+            }
+        }
     }
 
     fun refreshChat() {

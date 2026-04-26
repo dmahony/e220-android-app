@@ -1312,6 +1312,12 @@ void setupWebRoutes() {
     request->send(200, "text/plain", out);
   });
 
+  // Chat clear
+  server.on("/api/chat/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
+    clearChatHistory();
+    request->send(200, "application/json", "{\"status\":\"ok\",\"message\":\"Chat history cleared\"}");
+  });
+
   // Debug log clear
   server.on("/api/debug/clear", HTTP_POST, [](AsyncWebServerRequest *request) {
     debugLogReadPos = debugLogHead;

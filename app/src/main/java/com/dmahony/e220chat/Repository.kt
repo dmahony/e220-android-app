@@ -233,6 +233,10 @@ class E220Repository(context: Context) {
 
     suspend fun getChat(): ChatSnapshot = E220Protocol.parseChatResponse(exchange(E220Protocol.buildChatRequest()))
 
+    suspend fun clearChatHistory() {
+        exchange(E220Protocol.buildClearChatRequest())
+    }
+
     suspend fun sendMessage(message: String): String {
         val response = exchange(E220Protocol.buildSendRequest(message))
         return E220Protocol.parseSendAcknowledgement(response)
