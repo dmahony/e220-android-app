@@ -70,13 +70,36 @@ python3 -m venv /tmp/pio-venv
 PATH=/tmp/pio-venv/bin:$PATH platformio run -e esp32dev
 ```
 
-## Flash
+## Connect the ESP32 for flashing
+
+Use a USB-to-serial connection to the ESP32 board.
+
+Typical connections:
+
+- ESP32 5V or 3.3V power from the USB serial adapter or dev board
+- GND to GND
+- TX on the adapter to RX0 on the ESP32
+- RX on the adapter to TX0 on the ESP32
+
+If the board does not auto-enter flash mode, hold BOOT while pressing EN/RESET, then release EN/RESET first and BOOT second.
+
+If your board already has a built-in USB interface, just connect the USB cable and select the resulting serial port.
+
+## Upload
 
 ```bash
 pio run -t upload --upload-port /dev/ttyUSB0
 ```
 
-If your board appears on a different serial port, replace `/dev/ttyUSB0` accordingly.
+Replace `/dev/ttyUSB0` with the port for your board. Common alternatives are `/dev/ttyUSB1` or `/dev/serial/by-id/...`.
+
+If you want to build and upload in one step:
+
+```bash
+PATH=/tmp/pio-venv/bin:$PATH platformio run -e esp32dev -t upload --upload-port /dev/ttyUSB0
+```
+
+After upload, the ESP32 should reset automatically. If it does not, press EN/RESET once.
 
 ## Android app pairing flow
 
