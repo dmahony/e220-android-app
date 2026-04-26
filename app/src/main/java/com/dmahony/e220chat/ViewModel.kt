@@ -40,7 +40,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     var debugText by mutableStateOf("")
         private set
-    var debugPaused by mutableStateOf(false)
+    var debugEnabled by mutableStateOf(false)
         private set
     var transportLogText by mutableStateOf("")
         private set
@@ -79,12 +79,23 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     private var rebootReconnectGraceUntilMs = 0L
     private var chatPollJob: Job? = null
     private var debugPollJob: Job? = null
+    private var startupAutoConnectAttempted = false
 
     init {
-        viewModelScope.launch { refreshBluetoothDevices() }
         if (repo.isConnected) {
             connectionState = ConnectionState.CONNECTED
             connectionHint = selectedBluetoothName.ifBlank { "Bluetooth connected" }
+        }
+        if (repo.selectedDeviceAddress.isNullOrBlank()) {
+            viewModelScope.launch { refreshBluetoothDevices() }
+        } else {
+            autoConnectLastDevice()
+            viewModelScope.launch {
+                delay(1200)
+                if (!repo.isConnected) {
+                    refreshBluetoothDevices()
+                }
+            }
         }
         refreshAllIfConnected()
         syncTransportLogs()
@@ -130,6 +141,15 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         selectedBluetoothName = device.name
         connectionHint = "Ready to connect to ${device.name}"
         syncTransportLogs()
+    }
+
+    fun autoConnectLastDevice() {
+        if (startupAutoConnectAttempted) return
+        val address = repo.selectedDeviceAddress.orEmpty()
+        if (address.isBlank()) return
+        startupAutoConnectAttempted = true
+        val name = repo.selectedDeviceName.orEmpty().ifBlank { address }
+        connectBluetooth(BluetoothDeviceInfo(name = name, address = address), onError = {})
     }
 
     fun connectBluetooth(device: BluetoothDeviceInfo, onError: (String) -> Unit, onSuccess: () -> Unit = {}) {
@@ -178,11 +198,11 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     fun reconnectSavedDevice(onError: (String) -> Unit) {
         val address = selectedBluetoothAddress.ifBlank { repo.selectedDeviceAddress.orEmpty() }
-        val device = bluetoothDevices.firstOrNull { it.address == address }
-        if (device != null) {
-            connectBluetooth(device, onError)
+        if (address.isNotBlank()) {
+            val name = selectedBluetoothName.ifBlank { repo.selectedDeviceName.orEmpty() }.ifBlank { address }
+            connectBluetooth(BluetoothDeviceInfo(name = name, address = address), onError)
         } else {
-            onError("Select a nearby BLE device first")
+            onError("No saved BLE device to reconnect")
         }
     }
 
@@ -216,7 +236,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 operationStatus = operationStatus.copy(type = "send", state = "success", message = "Message sent")
                 connectionHint = "Sent to radio"
                 refreshChat()
-                if (selectedTab == AppTab.DEBUG) {
+                if (selectedTab == AppTab.DEBUG && debugEnabled) {
                     refreshDebugNow()
                 }
                 syncTransportLogs()
@@ -575,7 +595,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun refreshDebugNow() {
-        refreshDebug()
+        refreshDebug(force = true)
     }
 
     fun clearDebug() {
@@ -591,8 +611,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun toggleDebugPause() {
-        debugPaused = !debugPaused
+    fun updateDebugEnabled(enabled: Boolean) {
+        debugEnabled = enabled
     }
 
     private fun shouldSuppressTransientRebootError(e: Exception): Boolean {
@@ -608,8 +628,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         connectionHint = "ESP32 is rebooting, reconnecting..."
     }
 
-    private fun refreshDebug() {
-        if (debugPaused || !repo.isConnected) return
+    private fun refreshDebug(force: Boolean = false) {
+        if (!repo.isConnected) return
+        if (!force && !debugEnabled) return
         if (debugRefreshJob?.isActive == true) return
         debugRefreshJob = viewModelScope.launch {
             try {
@@ -694,7 +715,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
         debugPollJob = viewModelScope.launch {
             while (isActive) {
-                if (repo.isConnected && selectedTab == AppTab.DEBUG) {
+                if (repo.isConnected && selectedTab == AppTab.DEBUG && debugEnabled) {
                     refreshDebug()
                 }
                 delay(1500)

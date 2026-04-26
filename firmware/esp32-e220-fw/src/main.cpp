@@ -1003,6 +1003,58 @@ String buildTxHistoryEntry(const String &message) {
   return "[TX] " + message;
 }
 
+// Radio transport uses newline as the message delimiter, so escape any
+// payload newlines/backslashes before sending and restore them on receive.
+String encodeRadioPayload(const String &message) {
+  String encoded;
+  encoded.reserve(message.length() * 2);
+  for (size_t i = 0; i < message.length(); i++) {
+    char c = message.charAt(i);
+    switch (c) {
+      case '\\':
+        encoded += "\\\\";
+        break;
+      case '\n':
+        encoded += "\\n";
+        break;
+      case '\r':
+        encoded += "\\r";
+        break;
+      default:
+        encoded += c;
+        break;
+    }
+  }
+  return encoded;
+}
+
+String decodeRadioPayload(const String &message) {
+  String decoded;
+  decoded.reserve(message.length());
+  bool escape = false;
+  for (size_t i = 0; i < message.length(); i++) {
+    char c = message.charAt(i);
+    if (escape) {
+      switch (c) {
+        case 'n': decoded += '\n'; break;
+        case 'r': decoded += '\r'; break;
+        case '\\': decoded += '\\'; break;
+        default:
+          decoded += '\\';
+          decoded += c;
+          break;
+      }
+      escape = false;
+    } else if (c == '\\') {
+      escape = true;
+    } else {
+      decoded += c;
+    }
+  }
+  if (escape) decoded += '\\';
+  return decoded;
+}
+
 #if 0
 void setupFS() {
   if (!LittleFS.begin(true)) {
@@ -1556,6 +1608,8 @@ void processRxPacket() {
   }
   
   msg.trim();
+  msg = decodeRadioPayload(msg);
+  msg.trim();
   
   if (msg.length() > 0 || rssiRaw >= 0) {
     String display = "[RX] " + msg;
@@ -1663,13 +1717,14 @@ void handleUSBSerial() {
       const int CHUNK_SIZE = 190;
       int inputLen = input.length();
       
+      String wireMessage = encodeRadioPayload(input);
       if (inputLen <= CHUNK_SIZE) {
-        e220Serial.print(input);
+        e220Serial.print(wireMessage);
         e220Serial.print('\n');
       } else {
-        for (int i = 0; i < inputLen; i += CHUNK_SIZE) {
-          int end = min(i + CHUNK_SIZE, inputLen);
-          String chunk = input.substring(i, end);
+        for (int i = 0; i < wireMessage.length(); i += CHUNK_SIZE) {
+          int end = min(i + CHUNK_SIZE, wireMessage.length());
+          String chunk = wireMessage.substring(i, end);
           e220Serial.print(chunk);
           e220Serial.flush();
           waitE220Ready(3000);
@@ -2277,12 +2332,14 @@ void handleTxQueue() {
   dbg.printf("[TX] Sending (%d bytes)...\n", msgLen);
   
   if (msgLen <= CHUNK_SIZE) {
-    e220Serial.print(txQueue);
+    String wireMessage = encodeRadioPayload(txQueue);
+    e220Serial.print(wireMessage);
     e220Serial.print('\n');
   } else {
-    for (int i = 0; i < msgLen; i += CHUNK_SIZE) {
-      int chunkEnd = min(i + CHUNK_SIZE, msgLen);
-      String chunk = txQueue.substring(i, chunkEnd);
+    String wireMessage = encodeRadioPayload(txQueue);
+    for (int i = 0; i < wireMessage.length(); i += CHUNK_SIZE) {
+      int chunkEnd = min(i + CHUNK_SIZE, (int)wireMessage.length());
+      String chunk = wireMessage.substring(i, chunkEnd);
       e220Serial.print(chunk);
       e220Serial.flush();
       waitE220Ready(3000);
@@ -2312,8 +2369,9 @@ void handleE220Serial() {
     }
 
     if (printable) {
-      dbg.printf("[E220] RX: %s\n", line.c_str());
-      addChatHistory("[RX] " + line);
+      String message = decodeRadioPayload(line);
+      dbg.printf("[E220] RX: %s\n", message.c_str());
+      addChatHistory("[RX] " + message);
     } else {
       e220_rx_errors++;
       dbg.print("[E220] RX ignored HEX:");

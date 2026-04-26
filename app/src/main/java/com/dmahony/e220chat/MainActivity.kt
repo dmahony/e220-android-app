@@ -15,7 +15,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,8 +50,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.AnnotatedString
@@ -208,7 +208,7 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     vm = vm,
                     onRefresh = vm::refreshDebugNow,
                     onClear = vm::clearDebug,
-                    onTogglePause = vm::toggleDebugPause,
+                    onToggleDebug = vm::updateDebugEnabled,
                     modifier = Modifier.weight(1f)
                 )
                 AppTab.WIFI -> WifiScreen(
@@ -264,6 +264,10 @@ private fun ChatScreen(
     }
     val connected = vm.connectionState == ConnectionState.CONNECTED
     val listState = rememberLazyListState()
+    var composerHeightPx by remember { mutableIntStateOf(0) }
+    val composerBottomPadding = with(LocalDensity.current) {
+        composerHeightPx.toDp() + 12.dp
+    }
 
     LaunchedEffect(composerFocused, vm.chatMessages.size) {
         if (vm.chatMessages.isNotEmpty() && (composerFocused || connected)) {
@@ -298,7 +302,7 @@ private fun ChatScreen(
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 72.dp),
+                    contentPadding = PaddingValues(bottom = composerBottomPadding),
                     verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
                     itemsIndexed(vm.chatMessages) { _, message ->
@@ -309,7 +313,9 @@ private fun ChatScreen(
         }
 
         Surface(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { composerHeightPx = it.height },
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surfaceContainerLow,
             tonalElevation = 0.dp,
@@ -971,7 +977,7 @@ private fun DebugScreen(
     vm: E220ChatViewModel,
     onRefresh: () -> Unit,
     onClear: () -> Unit,
-    onTogglePause: () -> Unit,
+    onToggleDebug: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scroll = rememberScrollState()
@@ -982,6 +988,29 @@ private fun DebugScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        ElevatedCard(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
+                    Text("Debug auto-refresh", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Enable live debug polling. Manual refresh still works when off.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+                Switch(
+                    checked = vm.debugEnabled,
+                    onCheckedChange = onToggleDebug
+                )
+            }
+        }
+
         if (vm.diagnosticsError != null) ErrorBanner(vm.diagnosticsError!!)
 
         ElevatedCard(Modifier.fillMaxWidth()) {
@@ -1043,11 +1072,6 @@ private fun DebugScreen(
                         Icon(Icons.Default.Clear, contentDescription = null)
                         Spacer(Modifier.width(8.dp))
                         Text("Clear")
-                    }
-                    FilledTonalButton(onClick = onTogglePause) {
-                        Icon(if (vm.debugPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (vm.debugPaused) "Resume" else "Pause")
                     }
                 }
                 Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
