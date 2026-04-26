@@ -291,6 +291,7 @@ String buildOperationStatusJson() {
   doc["type"] = operationTypeName(operationState.type);
   doc["state"] = operationStateName(operationState.state);
   doc["message"] = operationState.message;
+  doc["updated_at_ms"] = millis();
   if (operationState.resultJson.length() > 0) {
     JsonVariant result = doc["result"];
     DeserializationError error = deserializeJson(result, operationState.resultJson);
@@ -1846,7 +1847,11 @@ String buildBleOperationResponse() {
   data["message"] = operationState.message;
   data["updated_at_ms"] = millis();
   if (operationState.resultJson.length() > 0) {
-    data["result_raw"] = operationState.resultJson;
+    JsonVariant result = data["result"];
+    DeserializationError error = deserializeJson(result, operationState.resultJson);
+    if (error) {
+      data["result_raw"] = operationState.resultJson;
+    }
   }
   String out;
   serializeJson(doc, out);
@@ -2269,19 +2274,32 @@ void handleQueuedOperations() {
 
   if (operationState.type == OP_WIFI_SCAN) {
     dbg.println("[OP] Starting queued WiFi scan...");
-    DynamicJsonDocument doc(2048);
+    const unsigned long scanStartedAt = millis();
+    DynamicJsonDocument doc(4096);
+    JsonObject scan = doc.createNestedObject("scan");
+    scan["status"] = "running";
+    scan["requested_at_ms"] = scanStartedAt;
+    scan["async"] = false;
     JsonArray networks = doc.createNestedArray("networks");
     int n = WiFi.scanNetworks(false);
+    const unsigned long scanCompletedAt = millis();
+    scan["completed_at_ms"] = scanCompletedAt;
+    scan["duration_ms"] = scanCompletedAt - scanStartedAt;
 
     if (n < 0) {
       dbg.printf("[WiFi] Scan failed with error %d\n", n);
-      operationState.resultJson = "{\"error\":\"scan failed\"}";
-      operationState.message = "WiFi scan failed";
+      scan["status"] = "error";
+      scan["error_code"] = n;
+      scan["error"] = "WiFi.scanNetworks returned an error";
+      serializeJson(doc, operationState.resultJson);
+      operationState.message = String("WiFi scan failed (error ") + n + ")";
       operationState.state = OP_STATE_ERROR;
       return;
     }
 
     dbg.printf("[WiFi] Found %d networks\n", n);
+    scan["status"] = "success";
+    scan["network_count"] = n;
     for (int i = 0; i < n && i < 20; i++) {
       JsonObject net = networks.createNestedObject();
       net["ssid"] = WiFi.SSID(i);
@@ -2291,7 +2309,7 @@ void handleQueuedOperations() {
     }
     WiFi.scanDelete();
     serializeJson(doc, operationState.resultJson);
-    operationState.message = "WiFi scan complete";
+    operationState.message = String("WiFi scan complete: ") + n + " network(s) found";
     operationState.state = OP_STATE_SUCCESS;
     return;
   }
@@ -2373,23 +2391,47 @@ void handleE220Serial() {
     line.trim();
     if (line.length() == 0) continue;
 
+    String payload = line;
+    int rssiDbm = 0;
+    bool hasRssiByte = false;
+
+    // Some E220 configurations append a trailing RSSI byte to each received frame.
+    // If that byte is present, strip it before printable/escape parsing so valid
+    // chat payloads are not discarded as "non-printable".
+    if (e220_config.rssi_byte && payload.length() > 0) {
+      uint8_t tail = (uint8_t)payload.charAt(payload.length() - 1);
+      if (tail < 0x20 || tail > 0x7E) {
+        rssiDbm = -static_cast<int8_t>(tail);
+        payload.remove(payload.length() - 1);
+        hasRssiByte = true;
+        lastRssi = rssiDbm;
+      }
+    }
+
+    if (payload.length() == 0) continue;
+
     bool printable = true;
     bool allFf = true;
-    for (size_t i = 0; i < line.length(); i++) {
-      uint8_t b = (uint8_t)line.charAt(i);
+    for (size_t i = 0; i < payload.length(); i++) {
+      uint8_t b = (uint8_t)payload.charAt(i);
       if (b != 0xFF) allFf = false;
       if (!((b >= 0x20 && b <= 0x7E) || b == '\t')) printable = false;
     }
 
     if (printable) {
-      String message = decodeRadioPayload(line);
-      dbg.printf("[E220] RX: %s\n", message.c_str());
-      addChatHistory("[RX] " + message);
+      String message = decodeRadioPayload(payload);
+      if (hasRssiByte) {
+        dbg.printf("[E220] RX: %s [RSSI:%d dBm]\n", message.c_str(), rssiDbm);
+        addChatHistory("[RX] " + message + " [RSSI:" + String(rssiDbm) + "dBm]");
+      } else {
+        dbg.printf("[E220] RX: %s\n", message.c_str());
+        addChatHistory("[RX] " + message);
+      }
     } else {
       e220_rx_errors++;
       dbg.print("[E220] RX ignored HEX:");
-      for (size_t i = 0; i < line.length(); i++) {
-        dbg.printf(" %02X", (uint8_t)line.charAt(i));
+      for (size_t i = 0; i < payload.length(); i++) {
+        dbg.printf(" %02X", (uint8_t)payload.charAt(i));
       }
       dbg.println(allFf ? " (all FF)" : " (non-printable)");
     }

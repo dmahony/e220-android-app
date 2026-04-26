@@ -161,3 +161,18 @@ data class WifiNetwork(
     val encrypted: Boolean,
     val channel: Int
 )
+
+data class WifiScanInfo(
+    val status: String = "idle",
+    val requestedAtMs: Long = 0L,
+    val completedAtMs: Long = 0L,
+    val durationMs: Long = 0L,
+    val networkCount: Int = 0,
+    val errorCode: Int? = null,
+    val error: String = ""
+)
+
+data class WifiScanResult(
+    val scan: WifiScanInfo = WifiScanInfo(),
+    val networks: List<WifiNetwork> = emptyList()
+)

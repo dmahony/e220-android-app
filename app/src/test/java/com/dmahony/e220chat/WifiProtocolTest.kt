@@ -69,9 +69,17 @@ class WifiProtocolTest {
         val operation = OperationStatus(
             type = "wifi_scan",
             state = "success",
-            message = "WiFi scan complete",
+            message = "WiFi scan complete: 1 network(s) found",
+            updatedAtMs = 123456L,
             rawResult = """
                 {
+                  "scan": {
+                    "status": "success",
+                    "requested_at_ms": 1000,
+                    "completed_at_ms": 1500,
+                    "duration_ms": 500,
+                    "network_count": 1
+                  },
                   "networks": [
                     {
                       "ssid": "Cafe WiFi",
@@ -84,12 +92,43 @@ class WifiProtocolTest {
             """.trimIndent()
         )
 
-        val networks = E220Protocol.parseWifiScanNetworks(operation)
+        val scan = E220Protocol.parseWifiScanResult(operation)
 
-        assertEquals(1, networks.size)
-        assertEquals("Cafe WiFi", networks.single().ssid)
-        assertEquals(-42, networks.single().rssi)
-        assertEquals(false, networks.single().encrypted)
-        assertEquals(6, networks.single().channel)
+        assertEquals("success", scan.scan.status)
+        assertEquals(1000L, scan.scan.requestedAtMs)
+        assertEquals(1500L, scan.scan.completedAtMs)
+        assertEquals(500L, scan.scan.durationMs)
+        assertEquals(1, scan.scan.networkCount)
+        assertEquals(1, scan.networks.size)
+        assertEquals("Cafe WiFi", scan.networks.single().ssid)
+        assertEquals(-42, scan.networks.single().rssi)
+        assertEquals(false, scan.networks.single().encrypted)
+        assertEquals(6, scan.networks.single().channel)
+    }
+
+    @Test
+    fun `wifi scan result parser captures esp32 error details`() {
+        val operation = OperationStatus(
+            type = "wifi_scan",
+            state = "error",
+            message = "WiFi scan failed (error -2)",
+            rawResult = """
+                {
+                  "scan": {
+                    "status": "error",
+                    "error_code": -2,
+                    "error": "scan failed"
+                  },
+                  "networks": []
+                }
+            """.trimIndent()
+        )
+
+        val scan = E220Protocol.parseWifiScanResult(operation)
+
+        assertEquals("error", scan.scan.status)
+        assertEquals(-2, scan.scan.errorCode)
+        assertEquals("scan failed", scan.scan.error)
+        assertEquals(0, scan.networks.size)
     }
 }

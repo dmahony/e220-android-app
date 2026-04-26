@@ -1,7 +1,13 @@
 
+@file:OptIn(ExperimentalLayoutApi::class)
 package com.dmahony.e220chat
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -33,6 +39,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.FlowRow
@@ -46,6 +53,7 @@ import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Clear
@@ -82,7 +90,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun E220ChatRoot(vm: E220ChatViewModel) {
     val context = LocalContext.current
@@ -118,6 +126,27 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
             )
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+                when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
+                    BluetoothAdapter.STATE_ON -> vm.onBluetoothAdapterStateChanged(true)
+                    BluetoothAdapter.STATE_OFF -> vm.onBluetoothAdapterStateChanged(false)
+                }
+            }
+        }
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("DEPRECATION")
+            context.registerReceiver(receiver, filter)
+        }
+        onDispose {
+            runCatching { context.unregisterReceiver(receiver) }
         }
     }
     val openBluetoothPicker: () -> Unit = {
@@ -743,6 +772,59 @@ private fun ConfigSectionCard(
     }
 }
 
+@Composable
+private fun StatusChip(text: String, colors: StatusChipColors) {
+    Surface(
+        color = colors.container,
+        contentColor = colors.content,
+        shape = RoundedCornerShape(999.dp),
+        border = BorderStroke(1.dp, colors.content.copy(alpha = 0.22f))
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+        )
+    }
+}
+
+@Composable
+private fun WifiSignalBars(
+    rssi: Int,
+    modifier: Modifier = Modifier,
+    tint: Color = MaterialTheme.colorScheme.primary
+) {
+    val activeBars = when {
+        rssi >= -50 -> 4
+        rssi >= -60 -> 3
+        rssi >= -70 -> 2
+        rssi >= -80 -> 1
+        else -> 0
+    }
+    val barHeights = listOf(8.dp, 12.dp, 16.dp, 20.dp)
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom
+    ) {
+        barHeights.forEachIndexed { index, height ->
+            val active = index < activeBars
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(height)
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(tint.copy(alpha = if (active) 0.95f else 0.18f))
+            )
+        }
+    }
+}
+
+private data class StatusChipColors(
+    val container: Color,
+    val content: Color
+)
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(
@@ -1346,12 +1428,19 @@ private fun WifiScreen(
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = { vm.scanWifiNetworks() },
-                        enabled = wifiSupported && vm.wifiStatus.enabled,
+                        enabled = wifiSupported && vm.wifiStatus.enabled && !vm.wifiScanInProgress,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
+                        if (vm.wifiScanInProgress) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                        }
                         Spacer(Modifier.width(8.dp))
-                        Text("Scan")
+                        Text(if (vm.wifiScanInProgress) "Scanning" else "Scan")
                     }
                     Button(
                         onClick = {
@@ -1378,12 +1467,121 @@ private fun WifiScreen(
                     }
                 }
 
-                if (vm.wifiStatus.enabled && vm.wifiNetworks.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        vm.wifiNetworks.forEach { net ->
-                            val savedPasswordAvailable = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staPassword.isNotBlank()
-                            OutlinedCard(
+                if (vm.wifiScanInProgress || vm.wifiScanResult.scan.status != "idle") {
+                    val scan = vm.wifiScanResult.scan
+                    val isScanning = vm.wifiScanInProgress || scan.status.equals("scanning", ignoreCase = true)
+                    val isSuccess = scan.status.equals("success", ignoreCase = true)
+                    val isError = scan.status.equals("error", ignoreCase = true)
+                    val chipText = when {
+                        isScanning -> "SCANNING"
+                        isSuccess -> "SUCCESS"
+                        isError -> "ERROR"
+                        else -> scan.status.uppercase()
+                    }
+                    val chipColors = when {
+                        isScanning -> StatusChipColors(
+                            container = Color(0xFFFFF4CC),
+                            content = Color(0xFF8A6A00)
+                        )
+                        isSuccess -> StatusChipColors(
+                            container = Color(0xFFDFF3E3),
+                            content = Color(0xFF11662E)
+                        )
+                        isError -> StatusChipColors(
+                            container = Color(0xFFFFE3E1),
+                            content = Color(0xFFB3261E)
+                        )
+                        else -> StatusChipColors(
+                            container = MaterialTheme.colorScheme.surfaceVariant,
+                            content = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
                                 modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    if (isScanning) "Scan in progress" else "Last scan",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                StatusChip(text = chipText, colors = chipColors)
+                            }
+                            if (isScanning) {
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                    Text(
+                                        text = "Still scanning for networks. Older phones may need a little longer to receive the result.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            } else {
+                                Text("Status: ${scan.status}", style = MaterialTheme.typography.bodyMedium)
+                                Text("Networks: ${scan.networkCount}", style = MaterialTheme.typography.bodyMedium)
+                                Text("Duration: ${scan.durationMs} ms", style = MaterialTheme.typography.bodyMedium)
+                                Text("Requested at: ${scan.requestedAtMs} ms", style = MaterialTheme.typography.bodyMedium)
+                                Text("Completed at: ${scan.completedAtMs} ms", style = MaterialTheme.typography.bodyMedium)
+                                if (scan.errorCode != null) {
+                                    Text("ESP32 error code: ${scan.errorCode}", style = MaterialTheme.typography.bodyMedium)
+                                }
+                                if (scan.error.isNotBlank()) {
+                                    Text(
+                                        text = scan.error,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (vm.wifiStatus.enabled && vm.wifiNetworks.isNotEmpty()) {
+                    val visibleNetworks = vm.wifiNetworks.sortedByDescending { it.rssi }
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (visibleNetworks.size > 1) {
+                            Text(
+                                text = "Sorted by signal strength",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        visibleNetworks.forEach { net ->
+                            val isSelected = selectedNetwork?.ssid == net.ssid
+                            val isConnected = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staConnected
+                            val savedPasswordAvailable = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staPassword.isNotBlank()
+                            val cardContainer = when {
+                                isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                isConnected -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
+                                else -> MaterialTheme.colorScheme.surfaceContainerLow
+                            }
+                            val cardBorderColor = when {
+                                isSelected -> MaterialTheme.colorScheme.primary
+                                isConnected -> MaterialTheme.colorScheme.tertiary
+                                else -> MaterialTheme.colorScheme.outlineVariant
+                            }
+                            val signalTint = when {
+                                isConnected -> MaterialTheme.colorScheme.tertiary
+                                isSelected -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = cardContainer),
+                                border = BorderStroke(if (isSelected || isConnected) 2.dp else 1.dp, cardBorderColor),
                                 onClick = {
                                     selectedNetwork = net
                                     wifiPassword = if (savedPasswordAvailable) vm.wifiStatus.staPassword else ""
@@ -1391,21 +1589,54 @@ private fun WifiScreen(
                             ) {
                                 Column(
                                     modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
+                                        verticalAlignment = Alignment.Top
                                     ) {
-                                        Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
-                                        Text("${net.rssi} dBm", style = MaterialTheme.typography.labelSmall)
+                                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                            Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
+                                            Text(
+                                                text = "Channel ${net.channel} • ${if (net.encrypted) "Encrypted" else "Open"}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                            WifiSignalBars(
+                                                rssi = net.rssi,
+                                                tint = signalTint,
+                                                modifier = Modifier.width(48.dp)
+                                            )
+                                            Text(
+                                                text = "${net.rssi} dBm",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
                                     }
-                                    Text(
-                                        text = "Channel ${net.channel} • ${if (net.encrypted) "Encrypted" else "Open"}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        if (isSelected) {
+                                            StatusChip(
+                                                text = "SELECTED",
+                                                colors = StatusChipColors(
+                                                    container = MaterialTheme.colorScheme.primary,
+                                                    content = MaterialTheme.colorScheme.onPrimary
+                                                )
+                                            )
+                                        }
+                                        if (isConnected) {
+                                            StatusChip(
+                                                text = "CONNECTED",
+                                                colors = StatusChipColors(
+                                                    container = MaterialTheme.colorScheme.tertiary,
+                                                    content = MaterialTheme.colorScheme.onTertiary
+                                                )
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }

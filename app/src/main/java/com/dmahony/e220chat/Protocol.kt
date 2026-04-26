@@ -181,25 +181,26 @@ object E220Protocol {
         )
     }
 
-    fun parseWifiScanNetworks(operation: OperationStatus): List<WifiNetwork> {
-        if (operation.type != "wifi_scan") return emptyList()
-        if (operation.state != "success") {
-            throw ApiException(operation.message.ifBlank { "WiFi scan failed" })
+    fun parseWifiScanResult(operation: OperationStatus): WifiScanResult {
+        if (operation.type != "wifi_scan") {
+            throw ApiException("Unexpected operation type: ${operation.type}")
         }
 
         val raw = operation.rawResult.trim()
-        if (raw.isBlank()) return emptyList()
-
-        val result = try {
-            E220Json.parseToJsonElement(raw)
-        } catch (_: Exception) {
-            return emptyList()
+        val resultObject = if (raw.isBlank()) {
+            null
+        } else {
+            try {
+                E220Json.parseToJsonElement(raw).jsonObject
+            } catch (_: Exception) {
+                null
+            }
         }
 
-        val resultObject = result.jsonObject
-        val networks = resultObject["networks"]?.jsonArray ?: JsonArray(emptyList())
-        return buildList {
-            for (element in networks) {
+        val scanObject = resultObject?.get("scan")?.jsonObject
+        val networksJson = resultObject?.get("networks")?.jsonArray ?: JsonArray(emptyList())
+        val networks = buildList {
+            for (element in networksJson) {
                 val net = element.jsonObject
                 val encryption = net.optString("encryption", "").trim()
                 val encrypted = when {
@@ -217,7 +218,33 @@ object E220Protocol {
                 )
             }
         }
+
+        val status = scanObject?.optString("status", operation.state)
+            ?: operation.state.ifBlank { "idle" }
+        val requestedAtMs = scanObject?.optLong("requested_at_ms", operation.updatedAtMs) ?: operation.updatedAtMs
+        val completedAtMs = scanObject?.optLong("completed_at_ms", operation.updatedAtMs) ?: operation.updatedAtMs
+        val durationMs = scanObject?.optLong("duration_ms", (completedAtMs - requestedAtMs).coerceAtLeast(0L))
+            ?: (completedAtMs - requestedAtMs).coerceAtLeast(0L)
+        val networkCount = scanObject?.optInt("network_count", networks.size) ?: networks.size
+        val errorCode = if (scanObject?.containsKey("error_code") == true) scanObject.optInt("error_code") else null
+        val error = scanObject?.optString("error", operation.message).orEmpty().ifBlank { operation.message }
+
+        return WifiScanResult(
+            scan = WifiScanInfo(
+                status = status,
+                requestedAtMs = requestedAtMs,
+                completedAtMs = completedAtMs,
+                durationMs = durationMs,
+                networkCount = networkCount,
+                errorCode = errorCode,
+                error = error
+            ),
+            networks = networks
+        )
     }
+
+    fun parseWifiScanNetworks(operation: OperationStatus): List<WifiNetwork> =
+        parseWifiScanResult(operation).networks
 
     private fun buildConfigJson(config: E220Config): JsonObject = buildJsonObject {
         put("freq", config.freq.toDoubleOrNull() ?: 868.125)

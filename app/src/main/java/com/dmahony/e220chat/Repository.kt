@@ -11,6 +11,7 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
+import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
@@ -62,6 +63,8 @@ class E220Repository(context: Context) {
     private var transportLogs: List<TransportLogEntry> = emptyList()
     private var reconnectJob: Job? = null
     private var manualDisconnectRequested = false
+    private var activeScanScanner: BluetoothLeScanner? = null
+    private var activeScanCallback: ScanCallback? = null
 
     var connectionEventListener: ((TransportConnectionEvent) -> Unit)? = null
 
@@ -187,6 +190,10 @@ class E220Repository(context: Context) {
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
                 .build()
 
+            synchronized(stateLock) {
+                activeScanScanner = scanner
+                activeScanCallback = scanCallback
+            }
             scanner.startScan(emptyList(), settings, scanCallback)
             try {
                 delay(scanMillis)
@@ -195,6 +202,10 @@ class E220Repository(context: Context) {
                     scanner.stopScan(scanCallback)
                 } catch (_: Exception) {
                 }
+                synchronized(stateLock) {
+                    if (activeScanCallback === scanCallback) activeScanCallback = null
+                    if (activeScanScanner === scanner) activeScanScanner = null
+                }
             }
         }
 
@@ -202,6 +213,23 @@ class E220Repository(context: Context) {
         val discovered = chosen.values.sortedWith(compareBy<BluetoothDeviceInfo> { it.name.lowercase() }.thenBy { it.address })
         cachedDevices = discovered
         discovered
+    }
+
+    fun stopBleScan() {
+        val scanner: BluetoothLeScanner?
+        val callback: ScanCallback?
+        synchronized(stateLock) {
+            scanner = activeScanScanner
+            callback = activeScanCallback
+            activeScanScanner = null
+            activeScanCallback = null
+        }
+        if (scanner != null && callback != null) {
+            try {
+                scanner.stopScan(callback)
+            } catch (_: Exception) {
+            }
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -215,39 +243,9 @@ class E220Repository(context: Context) {
             }
             val device = adapter?.getRemoteDevice(address)
                 ?: throw ApiException("Bluetooth LE is not available on this device")
-            closeGattLocked()
-            delay(CONNECT_RETRY_DELAY_MS)
-            val connectDeferred = CompletableDeferred<Unit>()
-            pendingConnect = connectDeferred
-            val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
-            } else {
-                device.connectGatt(appContext, false, gattCallback)
-            } ?: throw ApiException("Failed to start BLE connection")
-            bluetoothGatt = gatt
             selectedDeviceAddress = address
             selectedDeviceName = device.name ?: device.address
-            appendTransportLog(TransportDirection.INFO, "Connecting to ${selectedDeviceName ?: address}")
-            connectionEventListener?.invoke(
-                TransportConnectionEvent(
-                    state = TransportConnectionState.CONNECTING,
-                    message = "Connecting to ${selectedDeviceName ?: address}..."
-                )
-            )
-            try {
-                withTimeout(CONNECT_TIMEOUT_MS) { connectDeferred.await() }
-            } catch (e: Exception) {
-                closeGattLocked()
-                throw ApiException(e.message ?: "Failed to connect to Bluetooth LE device")
-            }
-            appendTransportLog(TransportDirection.INFO, "Connected to ${selectedDeviceName ?: address}")
-            connectionEventListener?.invoke(
-                TransportConnectionEvent(
-                    state = TransportConnectionState.CONNECTED,
-                    message = "Connected to ${selectedDeviceName ?: address}"
-                )
-            )
-            BluetoothDeviceInfo(name = selectedDeviceName ?: device.address, address = address)
+            connectWithRetryLocked(device)
         }
     }
 
@@ -314,24 +312,23 @@ class E220Repository(context: Context) {
         exchange(E220Protocol.buildWifiToggleRequest(enabled))
     )
 
-    suspend fun scanWifi(): List<WifiNetwork> = withContext(Dispatchers.IO) {
+    suspend fun scanWifi(): WifiScanResult = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
             ensureConnectedLocked()
             executeExchangeLocked(E220Protocol.buildWifiScanRequest())
         }
 
         val deadlineMs = System.currentTimeMillis() + WIFI_SCAN_TIMEOUT_MS
+        var pollDelayMs = WIFI_SCAN_INITIAL_POLL_DELAY_MS
         while (System.currentTimeMillis() < deadlineMs) {
-            val operation = getOperation()
-            if (operation.type == "wifi_scan") {
-                if (operation.state == "success") {
-                    return@withContext E220Protocol.parseWifiScanNetworks(operation)
-                }
-                if (operation.state == "error") {
-                    throw ApiException(operation.message.ifBlank { "WiFi scan failed" })
+            val operation = runCatching { getOperation() }.getOrNull()
+            if (operation != null && operation.type == "wifi_scan") {
+                when (operation.state) {
+                    "success", "error" -> return@withContext E220Protocol.parseWifiScanResult(operation)
                 }
             }
-            delay(300)
+            delay(pollDelayMs)
+            pollDelayMs = (pollDelayMs + WIFI_SCAN_POLL_BACKOFF_MS).coerceAtMost(WIFI_SCAN_MAX_POLL_DELAY_MS)
         }
         throw ApiException("Timed out waiting for WiFi scan result")
     }
@@ -442,22 +439,61 @@ class E220Repository(context: Context) {
     private suspend fun runBlockingConnect(address: String) {
         val device = adapter?.getRemoteDevice(address)
             ?: throw ApiException("Bluetooth LE is not available on this device")
-        val connectDeferred = CompletableDeferred<Unit>()
-        pendingConnect = connectDeferred
+        connectWithRetryLocked(device)
+    }
+
+    private suspend fun connectWithRetryLocked(device: BluetoothDevice): BluetoothDeviceInfo {
+        val deviceName = device.name ?: device.address
+        var lastError: Exception? = null
+        repeat(CONNECT_MAX_ATTEMPTS) { attempt ->
+            stopBleScan()
+            if (attempt > 0) {
+                appendTransportLog(TransportDirection.INFO, "Retrying BLE connect (${attempt + 1}/$CONNECT_MAX_ATTEMPTS)")
+                delay(CONNECT_RETRY_BACKOFF_MS)
+            }
+            try {
+                return connectGattOnceLocked(device, deviceName)
+            } catch (e: Exception) {
+                lastError = e
+                closeGattLocked()
+            }
+        }
+        throw ApiException(lastError?.message ?: "Failed to connect to Bluetooth LE device")
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun connectGattOnceLocked(device: BluetoothDevice, deviceName: String): BluetoothDeviceInfo {
         closeGattLocked(triggerDisconnect = false)
         delay(CONNECT_RETRY_DELAY_MS)
+        val connectDeferred = CompletableDeferred<Unit>()
+        pendingConnect = connectDeferred
         val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         } else {
             device.connectGatt(appContext, false, gattCallback)
         } ?: throw ApiException("Failed to start BLE connection")
         bluetoothGatt = gatt
+        appendTransportLog(TransportDirection.INFO, "Connecting to $deviceName")
+        connectionEventListener?.invoke(
+            TransportConnectionEvent(
+                state = TransportConnectionState.CONNECTING,
+                message = "Connecting to $deviceName..."
+            )
+        )
         try {
             withTimeout(CONNECT_TIMEOUT_MS) { connectDeferred.await() }
         } catch (e: Exception) {
             closeGattLocked()
             throw ApiException(e.message ?: "Failed to connect to Bluetooth LE device")
         }
+        appendTransportLog(TransportDirection.INFO, "Connected to $deviceName")
+        connectionEventListener?.invoke(
+            TransportConnectionEvent(
+                state = TransportConnectionState.CONNECTED,
+                message = "Connected to $deviceName"
+            )
+        )
+        return BluetoothDeviceInfo(name = deviceName, address = device.address)
     }
 
     private fun closeGattLocked(triggerDisconnect: Boolean = true) {
@@ -730,9 +766,14 @@ class E220Repository(context: Context) {
         // Chat/debug history can legitimately take longer than 20 seconds on larger payloads.
         private const val RESPONSE_TIMEOUT_MS = 30000L
         private const val CONFIG_APPLY_TIMEOUT_MS = 12000L
-        private const val WIFI_SCAN_TIMEOUT_MS = 15000L
+        private const val WIFI_SCAN_TIMEOUT_MS = 60000L
+        private const val WIFI_SCAN_INITIAL_POLL_DELAY_MS = 250L
+        private const val WIFI_SCAN_POLL_BACKOFF_MS = 150L
+        private const val WIFI_SCAN_MAX_POLL_DELAY_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 20000L
         private const val CONNECT_RETRY_DELAY_MS = 250L
+        private const val CONNECT_MAX_ATTEMPTS = 2
+        private const val CONNECT_RETRY_BACKOFF_MS = 600L
         private const val AUTO_RECONNECT_WAIT_MS = 10000L
         private const val AUTO_RECONNECT_BACKOFF_MS = 1200L
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5

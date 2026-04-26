@@ -60,6 +60,10 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         private set
     var wifiNetworks by mutableStateOf(listOf<WifiNetwork>())
         private set
+    var wifiScanResult by mutableStateOf(WifiScanResult())
+        private set
+    var wifiScanInProgress by mutableStateOf(false)
+        private set
     var wifiError by mutableStateOf<String?>(null)
         private set
     var wifiApiSupported by mutableStateOf(true)
@@ -230,6 +234,32 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             connectionState = ConnectionState.DISCONNECTED
             connectionHint = "Bluetooth disconnected"
             syncTransportLogs()
+        }
+    }
+
+    fun onBluetoothAdapterStateChanged(enabled: Boolean) {
+        if (enabled) {
+            viewModelScope.launch {
+                try {
+                    refreshBluetoothDevices()
+                    if (repo.selectedDeviceAddress.orEmpty().isNotBlank() && !repo.isConnected) {
+                        reconnectSavedDevice(onError = {})
+                    }
+                } catch (_: Exception) {
+                }
+            }
+        } else {
+            viewModelScope.launch {
+                try {
+                    repo.disconnect()
+                } catch (_: Exception) {
+                }
+                rebootInProgress = false
+                rebootReconnectJob?.cancel()
+                connectionState = ConnectionState.DISCONNECTED
+                connectionHint = "Bluetooth turned off"
+                syncTransportLogs()
+            }
         }
     }
 
@@ -427,7 +457,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (snapshot.reset || lastChatSequence < 0 || snapshot.sequence < lastChatSequence) {
             chatMessages = snapshot.messages
         } else if (snapshot.sequence > lastChatSequence) {
-            chatMessages = snapshot.messages
+            chatMessages = chatMessages + snapshot.messages
         }
         lastChatSequence = snapshot.sequence
     }
@@ -638,20 +668,56 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             return
         }
         viewModelScope.launch {
+            if (wifiScanInProgress) return@launch
+            wifiScanInProgress = true
+            wifiError = null
+            wifiScanResult = WifiScanResult(
+                scan = WifiScanInfo(
+                    status = "scanning",
+                    requestedAtMs = System.currentTimeMillis(),
+                    networkCount = wifiNetworks.size
+                ),
+                networks = wifiNetworks
+            )
             try {
-                wifiNetworks = repo.scanWifi()
-                wifiError = null
-                syncTransportLogs()
+                val scan = repo.scanWifi()
+                wifiScanResult = scan
+                wifiNetworks = scan.networks
+                wifiError = formatWifiScanError(scan)
             } catch (e: Exception) {
                 if (isUnsupportedWifiApiError(e)) {
                     wifiApiSupported = false
                     wifiError = "WiFi controls aren't supported by this firmware."
                     wifiNetworks = emptyList()
+                    wifiScanResult = WifiScanResult()
                 } else {
                     wifiError = e.message ?: "WiFi scan failed"
+                    wifiScanResult = WifiScanResult(
+                        scan = WifiScanInfo(
+                            status = "error",
+                            error = e.message ?: "WiFi scan failed"
+                        )
+                    )
+                    wifiNetworks = emptyList()
                 }
                 syncTransportLogs()
+            } finally {
+                wifiScanInProgress = false
             }
+        }
+    }
+
+    private fun formatWifiScanError(scan: WifiScanResult): String? {
+        return when {
+            scan.scan.status.equals("error", ignoreCase = true) -> {
+                val code = scan.scan.errorCode?.let { " (ESP32 error $it)" } ?: ""
+                val detail = scan.scan.error.ifBlank { scan.scan.status }
+                "WiFi scan failed$code: $detail"
+            }
+            scan.networks.isEmpty() || scan.scan.networkCount == 0 -> {
+                "WiFi scan completed, but no networks were found."
+            }
+            else -> null
         }
     }
 
