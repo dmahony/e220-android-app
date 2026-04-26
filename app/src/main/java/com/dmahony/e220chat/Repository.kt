@@ -341,7 +341,10 @@ class E220Repository(context: Context) {
         val gatt = bluetoothGatt ?: throw IOException("BLE GATT not connected")
         val characteristic = rxCharacteristic ?: throw IOException("BLE write characteristic not ready")
         val responseDeferred = CompletableDeferred<String>()
-        pendingResponse = responseDeferred
+        synchronized(stateLock) {
+            responseBuffer = StringBuilder()
+            pendingResponse = responseDeferred
+        }
         try {
             val payload = (requestText + "\n").toByteArray(Charsets.UTF_8)
             val chunkSize = 20
@@ -363,7 +366,9 @@ class E220Repository(context: Context) {
             }
             return withTimeout(RESPONSE_TIMEOUT_MS) { responseDeferred.await() }
         } finally {
-            if (pendingResponse === responseDeferred) pendingResponse = null
+            synchronized(stateLock) {
+                if (pendingResponse === responseDeferred) pendingResponse = null
+            }
         }
     }
 
@@ -450,6 +455,7 @@ class E220Repository(context: Context) {
 
     private fun handleIncomingChunk(chunk: String) {
         val completeLine: String? = synchronized(stateLock) {
+            if (pendingResponse == null) return
             responseBuffer.append(chunk)
             val buffer = responseBuffer.toString()
             val newlineIndex = buffer.indexOf('\n')

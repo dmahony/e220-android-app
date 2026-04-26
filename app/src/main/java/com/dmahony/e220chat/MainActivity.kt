@@ -688,9 +688,9 @@ private fun MessageBubble(message: ChatMessage) {
                             }
                         }
                     )
-                    if (message.sent && message.delivered) {
+                    if (message.sent) {
                         Text(
-                            text = "✓ Delivered",
+                            text = "✓ Sent",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -743,222 +743,228 @@ private fun SettingsScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(scroll)
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         vm.configError?.let { ErrorBanner(it) }
         vm.configStatus?.takeIf { it.isNotBlank() }?.let { SuccessBanner(it) }
 
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 1.dp
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .verticalScroll(scroll),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    "Manual-backed presets + ranges",
-                    style = MaterialTheme.typography.titleSmall
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    MiniChip("Freq ${vm.config.freq} MHz")
-                    MiniChip("Power ${vm.config.txpower}")
-                    MiniChip("Baud ${vm.config.baud}")
-                    MiniChip("Mode ${vm.config.txmode}")
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                tonalElevation = 1.dp
+            ) {
+                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "Manual-backed presets + ranges",
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        MiniChip("Freq ${vm.config.freq} MHz")
+                        MiniChip("Power ${vm.config.txpower}")
+                        MiniChip("Baud ${vm.config.baud}")
+                        MiniChip("Mode ${vm.config.txmode}")
+                    }
                 }
             }
-        }
 
-                ConfigSectionCard(
-                    title = "RF link",
-                    subtitle = "Carrier frequency, transmit power, air rate, transmission mode, and LBT."
-                ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "Channel / frequency",
-                    selectedValue = vm.config.freq,
-                    options = channelOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("freq", it) }
-                DropdownConfigField(
-                    label = "TX power",
-                    selectedValue = vm.config.txpower,
-                    options = txPowerOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("txpower", it) }
+            ConfigSectionCard(
+                title = "RF link",
+                subtitle = "Carrier frequency, transmit power, air rate, transmission mode, and LBT."
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "Channel / frequency",
+                        selectedValue = vm.config.freq,
+                        options = channelOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("freq", it) }
+                    DropdownConfigField(
+                        label = "TX power",
+                        selectedValue = vm.config.txpower,
+                        options = txPowerOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("txpower", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "Air rate",
+                        selectedValue = vm.config.airrate,
+                        options = airRateOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("airrate", it) }
+                    DropdownConfigField(
+                        label = "TX mode",
+                        selectedValue = vm.config.txmode,
+                        options = txModeOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("txmode", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "LBT",
+                        selectedValue = vm.config.lbt,
+                        options = onOffOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("lbt", it) }
+                    DropdownConfigField(
+                        label = "WOR cycle",
+                        selectedValue = vm.config.worCycle,
+                        options = wakeTimeOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wor_cycle", it) }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "Air rate",
-                    selectedValue = vm.config.airrate,
-                    options = airRateOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("airrate", it) }
-                DropdownConfigField(
-                    label = "TX mode",
-                    selectedValue = vm.config.txmode,
-                    options = txModeOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("txmode", it) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "LBT",
-                    selectedValue = vm.config.lbt,
-                    options = onOffOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("lbt", it) }
-                DropdownConfigField(
-                    label = "WOR cycle",
-                    selectedValue = vm.config.worCycle,
-                    options = wakeTimeOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("wor_cycle", it) }
-            }
-        }
 
-        ConfigSectionCard(
-            title = "Serial link",
-            subtitle = "UART baud, parity, packet length, and frame-drop timing."
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "Baud",
-                    selectedValue = vm.config.baud,
-                    options = baudOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("baud", it) }
-                DropdownConfigField(
-                    label = "Parity",
-                    selectedValue = vm.config.parity,
-                    options = parityOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("parity", it) }
+            ConfigSectionCard(
+                title = "Serial link",
+                subtitle = "UART baud, parity, packet length, and frame-drop timing."
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "Baud",
+                        selectedValue = vm.config.baud,
+                        options = baudOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("baud", it) }
+                    DropdownConfigField(
+                        label = "Parity",
+                        selectedValue = vm.config.parity,
+                        options = parityOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("parity", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "Packet length",
+                        selectedValue = vm.config.subpkt,
+                        options = packetLengthOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("subpkt", it) }
+                    ConfigField(
+                        label = "URXT",
+                        value = vm.config.urxt,
+                        supportingText = "Manual range: 1–255 byte times. Default 3.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("urxt", it) }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "Packet length",
-                    selectedValue = vm.config.subpkt,
-                    options = packetLengthOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("subpkt", it) }
-                ConfigField(
-                    label = "URXT",
-                    value = vm.config.urxt,
-                    supportingText = "Manual range: 1–255 byte times. Default 3.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("urxt", it) }
-            }
-        }
 
-        ConfigSectionCard(
-            title = "Addressing & encryption",
-            subtitle = "Communication address, destination, and 16-bit key fields."
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField(
-                    label = "Address",
-                    value = vm.config.addr,
-                    supportingText = "Manual range: 0–65535. 65535 is broadcast.",
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("addr", it) }
-                ConfigField(
-                    label = "Destination",
-                    value = vm.config.dest,
-                    supportingText = "Manual range: 0–65535. Defaults to 65535.",
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("dest", it) }
+            ConfigSectionCard(
+                title = "Addressing & encryption",
+                subtitle = "Communication address, destination, and 16-bit key fields."
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "Address",
+                        value = vm.config.addr,
+                        supportingText = "Manual range: 0–65535. 65535 is broadcast.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("addr", it) }
+                    ConfigField(
+                        label = "Destination",
+                        value = vm.config.dest,
+                        supportingText = "Manual range: 0–65535. Defaults to 65535.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("dest", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "Crypto high",
+                        value = vm.config.cryptH,
+                        supportingText = "App-specific 16-bit key high byte.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("crypt_h", it) }
+                    ConfigField(
+                        label = "Crypto low",
+                        value = vm.config.cryptL,
+                        supportingText = "App-specific 16-bit key low byte.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("crypt_l", it) }
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField(
-                    label = "Crypto high",
-                    value = vm.config.cryptH,
-                    supportingText = "App-specific 16-bit key high byte.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("crypt_h", it) }
-                ConfigField(
-                    label = "Crypto low",
-                    value = vm.config.cryptL,
-                    supportingText = "App-specific 16-bit key low byte.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("crypt_l", it) }
-            }
-        }
 
-        ConfigSectionCard(
-            title = "RSSI and save",
-            subtitle = "Optional RSSI helpers, LBT threshold, timeout, and save mode."
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DropdownConfigField(
-                    label = "RSSI noise",
-                    selectedValue = vm.config.rssiNoise,
-                    options = onOffOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("rssi_noise", it) }
-                DropdownConfigField(
-                    label = "RSSI byte",
-                    selectedValue = vm.config.rssiByte,
-                    options = onOffOptions,
-                    modifier = Modifier.weight(1f)
-                ) { vm.setConfigField("rssi_byte", it) }
+            ConfigSectionCard(
+                title = "RSSI and save",
+                subtitle = "Optional RSSI helpers, LBT threshold, timeout, and save mode."
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "RSSI noise",
+                        selectedValue = vm.config.rssiNoise,
+                        options = onOffOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("rssi_noise", it) }
+                    DropdownConfigField(
+                        label = "RSSI byte",
+                        selectedValue = vm.config.rssiByte,
+                        options = onOffOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("rssi_byte", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "LBT RSSI",
+                        value = vm.config.lbrRssi,
+                        supportingText = "Manual range: 0 to -128 dBm. Default -55.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("lbr_rssi", it) }
+                    ConfigField(
+                        label = "LBT timeout",
+                        value = vm.config.lbrTimeout,
+                        supportingText = "Manual range: 0–65535 ms. Default 2000.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("lbr_timeout", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "Save type",
+                        value = vm.config.saveType,
+                        supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
+                        modifier = Modifier.weight(1f),
+                        keyboardType = KeyboardType.Number
+                    ) { vm.setConfigField("savetype", it) }
+                    Spacer(modifier = Modifier.weight(1f))
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField(
-                    label = "LBT RSSI",
-                    value = vm.config.lbrRssi,
-                    supportingText = "Manual range: 0 to -128 dBm. Default -55.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("lbr_rssi", it) }
-                ConfigField(
-                    label = "LBT timeout",
-                    value = vm.config.lbrTimeout,
-                    supportingText = "Manual range: 0–65535 ms. Default 2000.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("lbr_timeout", it) }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ConfigField(
-                    label = "Save type",
-                    value = vm.config.saveType,
-                    supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
-                    modifier = Modifier.weight(1f),
-                    keyboardType = KeyboardType.Number
-                ) { vm.setConfigField("savetype", it) }
-                Spacer(modifier = Modifier.weight(1f))
-            }
-        }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onRefresh, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Refresh, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Refresh")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onRefresh, modifier = Modifier.weight(1f)) {
+                    Icon(Icons.Default.Refresh, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Refresh")
+                }
+                FilledTonalButton(onClick = onQuickSave, modifier = Modifier.weight(1f)) {
+                    Text("Quick save")
+                }
             }
-            FilledTonalButton(onClick = onQuickSave, modifier = Modifier.weight(1f)) {
-                Text("Quick save")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            Button(onClick = onSave, modifier = Modifier.weight(1f)) {
-                Text("Save config")
-            }
-            FilledTonalButton(onClick = onReboot, modifier = Modifier.weight(1f)) {
-                Text("Reboot ESP32")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onSave, modifier = Modifier.weight(1f)) {
+                    Text("Save config")
+                }
+                FilledTonalButton(onClick = onReboot, modifier = Modifier.weight(1f)) {
+                    Text("Reboot ESP32")
+                }
             }
         }
     }
 }
-
 @Composable
 private fun DebugScreen(
     vm: E220ChatViewModel,

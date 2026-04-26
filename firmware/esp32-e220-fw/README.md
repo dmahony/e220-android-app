@@ -39,16 +39,17 @@ Typical ESP32 wiring to the E220 module:
 
 | E220 Pin | ESP32 Pin | Purpose |
 |----------|-----------|---------|
-| RX | GPIO17 (RX2) | UART2 RX from module |
-| TX | GPIO16 (TX2) | UART2 TX to module |
-| M0 | GPIO2 | Mode control |
-| M1 | GPIO19 | Mode control |
-| AUX | GPIO4 | Status output |
+| RX | GPIO21 (RX2) | UART2 RX from module |
+| TX | GPIO22 (TX2) | UART2 TX to module |
+| M0 | GPIO25 | Mode control |
+| M1 | GPIO26 | Mode control |
+| AUX | GPIO27 | Status output |
 | VCC | 3.3V | Power |
 | GND | GND | Ground |
 
 Notes:
-
+- RX/TX are unchanged.
+- M0, M1, and AUX were moved off the boot-strapping pins to avoid startup issues.
 - Use a stable 3.3V supply for the E220 module.
 - Keep the antenna connected before powering the radio.
 - The Android app expects the ESP32 to advertise a stable device name.

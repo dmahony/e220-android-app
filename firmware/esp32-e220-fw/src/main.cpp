@@ -17,9 +17,9 @@
  * Hardware Wiring:
  * E220 RX -> GPIO21 (UART2 RX)
  * E220 TX -> GPIO22 (UART2 TX)
- * E220 M0 -> GPIO2 (Mode control)
- * E220 M1 -> GPIO19 (Mode control)
- * E220 AUX -> GPIO4 (Status input)
+ * E220 M0 -> GPIO25 (Mode control)
+ * E220 M1 -> GPIO26 (Mode control)
+ * E220 AUX -> GPIO27 (Status input)
  * E220 VCC -> 3.3V (with 10µF capacitor)
  * E220 GND -> GND
  */
@@ -43,9 +43,9 @@
 // GPIO Pin assignments for E220 module
 #define E220_RX_PIN   21              // UART2 RX from E220
 #define E220_TX_PIN   22              // UART2 TX to E220
-#define E220_M0_PIN   2               // Mode pin 0 (low = normal, high = config/sleep)
-#define E220_M1_PIN   19              // Mode pin 1 (low = normal, high = config/sleep)
-#define E220_AUX_PIN  4               // Status pin (high = ready, low = busy)
+#define E220_M0_PIN   25              // Mode pin 0 (low = normal, high = config/sleep)
+#define E220_M1_PIN   26              // Mode pin 1 (low = normal, high = config/sleep)
+#define E220_AUX_PIN  27              // Status pin (high = ready, low = busy)
 
 // UART Configuration
 #define UART_BAUD_CONFIG  9600        // E220 config mode ONLY supports 9600 8N1
@@ -705,7 +705,7 @@ void readE220Config() {
     while(e220Serial.available()) {
       dbg.printf("  byte: 0x%02X\n", e220Serial.read());
     }
-    dbg.println("[E220] Check: M0->GPIO2, M1->GPIO19, AUX->GPIO4, TX->GPIO22, RX->GPIO21");
+    dbg.println("[E220] Check: M0->GPIO25, M1->GPIO26, AUX->GPIO27, TX->GPIO22, RX->GPIO21");
     dbg.printf("[E220] AUX pin state: %s\n", digitalRead(E220_AUX_PIN) ? "HIGH" : "LOW");
   }
   
@@ -2285,7 +2285,6 @@ void handleTxQueue() {
     e220Serial.print('\n');
   }
   e220Serial.flush();
-  sendEspNowChat(txQueue);
   
   dbg.printf("[TX] Sent %d bytes\n", msgLen);
   txQueue = "";
