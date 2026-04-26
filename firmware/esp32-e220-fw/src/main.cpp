@@ -1111,16 +1111,8 @@ void setupWebRoutes() {
 
   // Chat history API - uses ArduinoJson for proper escaping
   server.on("/api/chat", HTTP_GET, [](AsyncWebServerRequest *request) {
-    DynamicJsonDocument doc(16384);
-    JsonArray history = doc.createNestedArray("history");
-    doc["total_messages"] = chatSequence;
-    doc["history_size"] = chatHistoryCount;
-    for (size_t i = 0; i < chatHistoryCount; i++) {
-      history.add(getChatHistoryItem(i));
-    }
-    String json;
-    serializeJson(doc, json);
-    request->send(200, "application/json", json);
+    const uint32_t since = request->hasParam("since") ? request->getParam("since")->value().toInt() : 0;
+    request->send(200, "application/json", buildBleChatResponse(since));
   });
 
   // Send message API
@@ -1779,19 +1771,38 @@ String jsonWrapOkMessage(const String &message) {
   return out;
 }
 
-String buildBleChatResponse() {
+static constexpr size_t CHAT_HISTORY_RESPONSE_LIMIT = 10;
+
+static size_t chatHistoryStartIndexForSequence(uint32_t since, bool &reset) {
+  const uint32_t oldestSequence = chatHistoryCount == 0 ? chatSequence + 1 : chatSequence - chatHistoryCount + 1;
+  reset = since == 0 || since > chatSequence || since + 1 < oldestSequence;
+  if (reset) {
+    return chatHistoryCount > CHAT_HISTORY_RESPONSE_LIMIT ? chatHistoryCount - CHAT_HISTORY_RESPONSE_LIMIT : 0;
+  }
+  if (chatHistoryCount == 0) {
+    return 0;
+  }
+  const uint32_t startSequence = since + 1;
+  return startSequence <= oldestSequence ? 0 : static_cast<size_t>(startSequence - oldestSequence);
+}
+
+String buildBleChatResponse(uint32_t since = 0) {
   DynamicJsonDocument doc(16384);
   doc["ok"] = true;
   JsonObject data = doc.createNestedObject("data");
+  bool reset = false;
+  const size_t start = chatHistoryStartIndexForSequence(since, reset);
   data["sequence"] = chatSequence;
+  data["since"] = since;
+  data["reset"] = reset;
+  data["total_messages"] = chatSequence;
+  data["history_size"] = chatHistoryCount;
   JsonArray messages = data.createNestedArray("messages");
-  // Limit to last 10 messages to avoid BLE buffer overflow
-  size_t start = 0;
-  if (chatHistoryCount > 10) {
-    start = chatHistoryCount - 10;
-  }
+  JsonArray history = data.createNestedArray("history");
   for (size_t i = start; i < chatHistoryCount; i++) {
-    messages.add(getChatHistoryItem(i));
+    const String &entry = getChatHistoryItem(i);
+    messages.add(entry);
+    history.add(entry);
   }
   String out;
   serializeJson(doc, out);
@@ -1952,7 +1963,8 @@ void bleSendResponse(const String &response) {
     String chunk = payload.substring(i, i + len);
     bleTxCharacteristic->setValue(chunk.c_str());
     bleTxCharacteristic->notify();
-    delay(15); // Increased delay to prevent buffer overflow on Android side
+    delay(1); // Keep BLE notifications moving fast enough to avoid Android timeouts
+    yield();
   }
 }
 
@@ -2028,7 +2040,8 @@ String handleBleApiRequest(const String &line) {
   bleRequestCount++;
 
   if (strcmp(path, "/api/chat") == 0 && strcmp(method, "GET") == 0) {
-    return buildBleChatResponse();
+    const uint32_t since = req["since"] | 0;
+    return buildBleChatResponse(since);
   }
   if (strcmp(path, "/api/send") == 0 && strcmp(method, "POST") == 0) {
     String message = req["message"] | "";

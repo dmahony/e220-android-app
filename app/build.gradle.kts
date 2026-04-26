@@ -4,6 +4,41 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+fun gitOutput(vararg args: String): String? {
+    return try {
+        val process = ProcessBuilder(listOf("git", *args))
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        if (process.waitFor() == 0) output.takeIf { it.isNotEmpty() } else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun computeVersionCode(): Int {
+    val override = providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()
+        ?: System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+    if (override != null && override > 0) return override
+
+    val commitCount = gitOutput("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+    return 1000 + commitCount
+}
+
+fun computeVersionName(): String {
+    val override = providers.gradleProperty("appVersionName").orNull
+        ?: System.getenv("APP_VERSION_NAME")
+    if (!override.isNullOrBlank()) return override
+
+    val exactTag = gitOutput("describe", "--tags", "--exact-match")
+    if (!exactTag.isNullOrBlank()) return exactTag
+
+    val commitCount = gitOutput("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+    val shortHash = gitOutput("rev-parse", "--short=8", "HEAD") ?: "local"
+    return "0.1.0-dev.$commitCount+$shortHash"
+}
+
 android {
     namespace = "com.dmahony.e220chat"
     compileSdk = 34
@@ -12,8 +47,8 @@ android {
         applicationId = "com.dmahony.e220chat"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = computeVersionCode()
+        versionName = computeVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

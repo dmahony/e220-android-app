@@ -68,6 +68,16 @@ class E220ProtocolTest {
     }
 
     @Test
+    fun `build chat request includes since sequence when requested`() {
+        val request = E220Protocol.buildChatRequest(42)
+        val envelope = json.parseToJsonElement(request).jsonObject
+
+        assertEquals("/api/chat", envelope["path"]?.jsonPrimitive?.content)
+        assertEquals("GET", envelope["method"]?.jsonPrimitive?.content)
+        assertEquals(42, envelope["since"]?.jsonPrimitive?.intOrNull)
+    }
+
+    @Test
     fun `parse chat response reads nested data messages and marks sent ones delivered`() {
         val response = """
             {
@@ -75,6 +85,7 @@ class E220ProtocolTest {
               "path": "/api/chat",
               "data": {
                 "sequence": 7,
+                "reset": true,
                 "messages": ["[RX] hello", "[TX] hi back"]
               }
             }
@@ -83,6 +94,7 @@ class E220ProtocolTest {
         val chat = E220Protocol.parseChatResponse(response)
 
         assertEquals(7, chat.sequence)
+        assertTrue(chat.reset)
         assertEquals(2, chat.messages.size)
         assertEquals("hello", chat.messages[0].text)
         assertTrue(!chat.messages[0].sent)

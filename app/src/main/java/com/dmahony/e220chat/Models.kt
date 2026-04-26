@@ -33,7 +33,8 @@ data class ChatMessage(
 @Serializable
 data class ChatSnapshot(
     val sequence: Int = 0,
-    val messages: List<ChatMessage> = emptyList()
+    val messages: List<ChatMessage> = emptyList(),
+    val reset: Boolean = false
 )
 
 @Serializable
@@ -113,6 +114,19 @@ data class OperationStatus(
     val message: String = "",
     val updatedAtMs: Long = 0L,
     val rawResult: String = "{}"
+)
+
+enum class TransportConnectionState {
+    CONNECTING,
+    CONNECTED,
+    DISCONNECTED,
+    RECONNECTING
+}
+
+data class TransportConnectionEvent(
+    val state: TransportConnectionState,
+    val message: String,
+    val manualDisconnect: Boolean = false
 )
 
 enum class TransportDirection {

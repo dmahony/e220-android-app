@@ -1246,25 +1246,31 @@
 
     let lastTotalMessages = -1;
     setInterval(() => {
-      fetch('/api/chat')
+      const since = Math.max(lastTotalMessages, 0);
+      fetch(`/api/chat?since=${since}`)
         .then(r => r.json())
-        .then(data => {
+        .then(payload => {
+          const data = payload.data || payload;
           const m = document.getElementById('messages');
-          if (data.total_messages !== lastTotalMessages) {
+          const messages = data.messages || data.history || [];
+          const needsReset = data.reset || lastTotalMessages < 0 || data.sequence < lastTotalMessages;
+          if (needsReset) {
             m.innerHTML = '';
-            (data.history || []).forEach(msg => {
-              const type = msg.includes('[TX]') ? 'sent' : 'received';
-              const msgEl = document.createElement('div');
-              msgEl.className = `message ${type}`;
-              msgEl.innerHTML = `<div class="bubble">${escapeHtml(msg.replace(/\[(TX|RX)\]\s*/, ''))}</div>`;
-              m.appendChild(msgEl);
-            });
-            lastTotalMessages = data.total_messages;
+          }
+          messages.forEach(msg => {
+            const type = msg.includes('[TX]') ? 'sent' : 'received';
+            const msgEl = document.createElement('div');
+            msgEl.className = `message ${type}`;
+            msgEl.innerHTML = `<div class="bubble">${escapeHtml(msg.replace(/\[(TX|RX)\]\s*/, ''))}</div>`;
+            m.appendChild(msgEl);
+          });
+          if (messages.length || needsReset) {
+            lastTotalMessages = data.sequence ?? data.total_messages ?? lastTotalMessages;
             m.scrollTop = m.scrollHeight;
           }
         })
         .catch(e => console.error(e));
-    }, 1000);
+    }, 2500);
 
     async function saveConfig() {
       const freq_custom = document.getElementById('freq_custom').value;

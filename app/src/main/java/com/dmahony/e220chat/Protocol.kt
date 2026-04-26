@@ -13,7 +13,9 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
 
 object E220Protocol {
-    fun buildChatRequest(): String = request("/api/chat", "GET")
+    fun buildChatRequest(sinceSequence: Int = 0): String = request("/api/chat", "GET") {
+        if (sinceSequence > 0) put("since", sinceSequence)
+    }
 
     fun buildClearChatRequest(): String = request("/api/chat/clear", "POST")
 
@@ -74,6 +76,7 @@ object E220Protocol {
     fun parseChatResponse(response: String): ChatSnapshot {
         val data = requireData(response)
         val sequence = data.optInt("sequence", 0)
+        val reset = data.optBooleanFlexible("reset")
         val messages = data["messages"]?.jsonArray ?: JsonArray(emptyList())
         val parsed = buildList {
             for (element in messages) {
@@ -84,7 +87,7 @@ object E220Protocol {
                 add(ChatMessage(text = cleaned.ifBlank { raw }, sent = sent, delivered = sent))
             }
         }
-        return ChatSnapshot(sequence = sequence, messages = parsed)
+        return ChatSnapshot(sequence = sequence, messages = parsed, reset = reset)
     }
 
     fun parseConfigResponse(response: String): E220Config {

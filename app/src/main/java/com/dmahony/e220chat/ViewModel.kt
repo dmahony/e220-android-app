@@ -6,16 +6,22 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
     private var rebootReconnectJob: Job? = null
     private var rebootInProgress = false
     private var chatRefreshJob: Job? = null
+    private var chatClearJob: Job? = null
     private var configRefreshJob: Job? = null
     private var diagnosticsRefreshJob: Job? = null
     private var debugRefreshJob: Job? = null
@@ -77,11 +83,18 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     private var lastChatSequence = -1
     private var rebootReconnectGraceUntilMs = 0L
+    private var chatSyncMutex = Mutex()
+    private var pendingChatClear: CompletableDeferred<Unit>? = null
     private var chatPollJob: Job? = null
     private var debugPollJob: Job? = null
     private var startupAutoConnectAttempted = false
 
     init {
+        repo.connectionEventListener = { event ->
+            viewModelScope.launch {
+                handleTransportEvent(event)
+            }
+        }
         if (repo.isConnected) {
             connectionState = ConnectionState.CONNECTED
             connectionHint = selectedBluetoothName.ifBlank { "Bluetooth connected" }
@@ -222,30 +235,126 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     fun sendMessage(message: String, onError: (String) -> Unit, onSuccess: () -> Unit = {}) {
         viewModelScope.launch {
+            awaitPendingChatClear()
+            chatSyncMutex.withLock {
+                try {
+                    val trimmed = message.trim()
+                    if (trimmed.isEmpty()) {
+                        onError("Please enter a message")
+                        return@withLock
+                    }
+                    if (!repo.isConnected) {
+                        onError("Connect to BLE first")
+                        return@withLock
+                    }
+
+                    val chunks = splitMessageForRadio(trimmed)
+                    val totalChunks = chunks.size
+                    chunks.forEachIndexed { index, chunk ->
+                        sendChunkWithRetry(chunk, index, totalChunks)
+                        if (index < chunks.lastIndex) {
+                            delay(300)
+                        }
+                    }
+
+                    operationStatus = operationStatus.copy(
+                        type = "send",
+                        state = "success",
+                        message = if (totalChunks == 1) "Message sent" else "Message sent in $totalChunks chunks"
+                    )
+                    connectionHint = if (totalChunks == 1) {
+                        "Sent to radio"
+                    } else {
+                        "Sent $totalChunks chunks to radio"
+                    }
+                    if (totalChunks > 1) {
+                        delay(400)
+                    }
+                    if (repo.isConnected) {
+                        refreshChatLocked()
+                        if (selectedTab == AppTab.DEBUG && debugEnabled) {
+                            refreshDebugNow()
+                        }
+                    }
+                    syncTransportLogs()
+                    onSuccess()
+                } catch (e: Exception) {
+                    if (e is java.util.concurrent.CancellationException) {
+                        return@withLock
+                    }
+                    val transportLoss = isTransportLossError(e)
+                    if (transportLoss) {
+                        connectionState = ConnectionState.CONNECTING
+                        connectionHint = "Bluetooth link lost, reconnecting..."
+                        operationStatus = operationStatus.copy(
+                            type = "send",
+                            state = "running",
+                            message = "Bluetooth link lost, reconnecting..."
+                        )
+                        syncTransportLogs()
+                        return@withLock
+                    }
+                    connectionState = ConnectionState.ERROR
+                    connectionHint = e.message ?: "Send failed"
+                    operationStatus = operationStatus.copy(
+                        type = "send",
+                        state = "error",
+                        message = e.message ?: "Send failed"
+                    )
+                    syncTransportLogs()
+                    onError(e.message ?: "Failed to send message")
+                }
+            }
+        }
+    }
+
+    private suspend fun sendChunkWithRetry(chunk: String, index: Int, totalChunks: Int) {
+        var attempt = 0
+        while (true) {
+            attempt++
+            val progress = if (totalChunks == 1) {
+                if (attempt == 1) "Sending message" else "Retrying message"
+            } else {
+                if (attempt == 1) {
+                    "Sending chunk ${index + 1}/$totalChunks"
+                } else {
+                    "Retrying chunk ${index + 1}/$totalChunks (attempt $attempt)"
+                }
+            }
+            operationStatus = operationStatus.copy(type = "send", state = "running", message = progress)
             try {
-                val trimmed = message.trim()
-                if (trimmed.isEmpty()) {
-                    onError("Please enter a message")
-                    return@launch
-                }
-                if (!repo.isConnected) {
-                    onError("Connect to BLE first")
-                    return@launch
-                }
-                repo.sendMessage(trimmed)
-                operationStatus = operationStatus.copy(type = "send", state = "success", message = "Message sent")
-                connectionHint = "Sent to radio"
-                refreshChat()
-                if (selectedTab == AppTab.DEBUG && debugEnabled) {
-                    refreshDebugNow()
-                }
-                syncTransportLogs()
-                onSuccess()
+                repo.sendMessage(chunk)
+                return
             } catch (e: Exception) {
-                connectionState = ConnectionState.ERROR
-                connectionHint = e.message ?: "Send failed"
-                syncTransportLogs()
-                onError(e.message ?: "Failed to send message")
+                if (e is java.util.concurrent.CancellationException) throw e
+                if (!isTransportLossError(e) || attempt >= 3) {
+                    throw e
+                }
+                connectionState = ConnectionState.CONNECTING
+                connectionHint = "Bluetooth link lost, reconnecting..."
+                operationStatus = operationStatus.copy(type = "send", state = "running", message = "Reconnecting before retrying chunk ${index + 1}/$totalChunks")
+                if (!waitForTransportReconnect()) {
+                    throw IOException("Bluetooth reconnect timed out")
+                }
+                delay(250L * attempt)
+            }
+        }
+    }
+
+    private suspend fun waitForTransportReconnect(): Boolean {
+        return withTimeoutOrNull(15000L) {
+            while (!repo.isConnected) {
+                delay(250)
+            }
+            true
+        } == true
+    }
+
+    private suspend fun awaitPendingChatClear() {
+        val gate = pendingChatClear ?: return
+        runCatching {
+            withTimeoutOrNull(5000L) {
+                gate.await()
             }
         }
     }
@@ -253,13 +362,25 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     fun clearChatMessages() {
         chatMessages = emptyList()
         chatError = null
-        viewModelScope.launch {
+        lastChatSequence = -1
+        pendingChatClear?.complete(Unit)
+        val clearGate = CompletableDeferred<Unit>()
+        pendingChatClear = clearGate
+        chatClearJob?.cancel()
+        chatClearJob = viewModelScope.launch {
             try {
-                if (repo.isConnected) {
-                    repo.clearChatHistory()
+                chatSyncMutex.withLock {
+                    if (repo.isConnected) {
+                        repo.clearChatHistory()
+                        refreshChatLocked()
+                    }
                 }
             } catch (e: Exception) {
                 chatError = e.message ?: "Chat clear failed"
+            } finally {
+                pendingChatClear = null
+                clearGate.complete(Unit)
+                chatClearJob = null
             }
         }
     }
@@ -272,25 +393,43 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (chatRefreshJob?.isActive == true) return
         chatRefreshJob = viewModelScope.launch {
             try {
-                val snapshot = repo.getChat()
-                if (snapshot.sequence != lastChatSequence) {
-                    chatMessages = snapshot.messages
-                    lastChatSequence = snapshot.sequence
+                awaitPendingChatClear()
+                chatSyncMutex.withLock {
+                    refreshChatLocked()
                 }
-                chatError = null
-                syncTransportLogs()
-            } catch (e: Exception) {
-                if (shouldSuppressTransientRebootError(e)) {
-                    setRebootReconnectStatus()
-                    chatError = null
-                } else if (!rebootInProgress) {
-                    chatError = e.message ?: "Chat refresh failed"
-                }
-                syncTransportLogs()
             } finally {
                 chatRefreshJob = null
             }
         }
+    }
+
+    private suspend fun refreshChatLocked() {
+        try {
+            val snapshot = repo.getChat(lastChatSequence.coerceAtLeast(0))
+            applyChatSnapshot(snapshot)
+            chatError = null
+            syncTransportLogs()
+        } catch (e: Exception) {
+            if (e is java.util.concurrent.CancellationException) {
+                return
+            }
+            if (shouldSuppressTransientRebootError(e)) {
+                setRebootReconnectStatus()
+                chatError = null
+            } else if (!rebootInProgress) {
+                chatError = e.message ?: "Chat refresh failed"
+            }
+            syncTransportLogs()
+        }
+    }
+
+    private fun applyChatSnapshot(snapshot: ChatSnapshot) {
+        if (snapshot.reset || lastChatSequence < 0 || snapshot.sequence < lastChatSequence) {
+            chatMessages = snapshot.messages
+        } else if (snapshot.sequence > lastChatSequence) {
+            chatMessages = snapshot.messages
+        }
+        lastChatSequence = snapshot.sequence
     }
 
     fun refreshConfig() {
@@ -624,6 +763,57 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             message.contains("BLE disconnected", ignoreCase = true)
     }
 
+    private fun isTransportLossError(e: Exception): Boolean {
+        val message = e.message.orEmpty()
+        return message.contains("BLE", ignoreCase = true) ||
+            message.contains("GATT", ignoreCase = true) ||
+            message.contains("socket", ignoreCase = true) ||
+            message.contains("timeout", ignoreCase = true) ||
+            message.contains("disconnected", ignoreCase = true) ||
+            message.contains("connect failed", ignoreCase = true)
+    }
+
+    private fun handleTransportEvent(event: TransportConnectionEvent) {
+        when (event.state) {
+            TransportConnectionState.CONNECTED -> {
+                rebootInProgress = false
+                rebootReconnectGraceUntilMs = 0L
+                connectionState = ConnectionState.CONNECTED
+                connectionHint = event.message.ifBlank { selectedBluetoothName.ifBlank { "Bluetooth connected" } }
+                configStatus = null
+                clearConnectionErrors()
+                if (operationStatus.type == "send" && operationStatus.state == "running") {
+                    operationStatus = operationStatus.copy(message = "Bluetooth reconnected, finishing send...")
+                }
+                refreshAllIfConnected()
+            }
+            TransportConnectionState.CONNECTING, TransportConnectionState.RECONNECTING -> {
+                connectionState = ConnectionState.CONNECTING
+                connectionHint = event.message.ifBlank { "Bluetooth link lost, reconnecting..." }
+                if (operationStatus.type == "send" && operationStatus.state == "running") {
+                    operationStatus = operationStatus.copy(message = connectionHint)
+                }
+            }
+            TransportConnectionState.DISCONNECTED -> {
+                if (event.manualDisconnect) {
+                    rebootInProgress = false
+                    connectionState = ConnectionState.DISCONNECTED
+                    connectionHint = event.message.ifBlank { "Bluetooth disconnected" }
+                    if (operationStatus.type == "send" && operationStatus.state == "running") {
+                        operationStatus = operationStatus.copy(state = "error", message = "Send stopped because Bluetooth disconnected")
+                    }
+                } else {
+                    connectionState = ConnectionState.ERROR
+                    connectionHint = event.message.ifBlank { "Bluetooth reconnect failed" }
+                    if (operationStatus.type == "send" && operationStatus.state == "running") {
+                        operationStatus = operationStatus.copy(state = "error", message = connectionHint)
+                    }
+                }
+            }
+        }
+        syncTransportLogs()
+    }
+
     private fun setRebootReconnectStatus() {
         connectionHint = "ESP32 is rebooting, reconnecting..."
     }
@@ -710,7 +900,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 if (repo.isConnected && selectedTab == AppTab.CHAT) {
                     refreshChat()
                 }
-                delay(1000)
+                delay(2500)
             }
         }
         debugPollJob = viewModelScope.launch {

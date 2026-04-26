@@ -43,6 +43,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -263,6 +264,17 @@ private fun ChatScreen(
         }
     }
     val connected = vm.connectionState == ConnectionState.CONNECTED
+    val sendCurrentDraft: () -> Unit = {
+        if (connected) {
+            vm.sendMessage(
+                draft,
+                onError = onError,
+                onSuccess = { draft = "" }
+            )
+        } else {
+            onOpenBluetooth()
+        }
+    }
     val listState = rememberLazyListState()
     var composerHeightPx by remember { mutableIntStateOf(0) }
     val composerBottomPadding = with(LocalDensity.current) {
@@ -340,6 +352,11 @@ private fun ChatScreen(
                         modifier = Modifier
                             .fillMaxSize()
                             .onFocusChanged { composerFocused = it.isFocused },
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(
+                            onSend = { sendCurrentDraft() },
+                            onDone = { sendCurrentDraft() }
+                        ),
                         placeholder = {
                             Text(
                                 text = if (connected) "Message" else "Connect BLE to chat",
@@ -400,17 +417,7 @@ private fun ChatScreen(
                     }
                 }
                 FilledTonalButton(
-                    onClick = {
-                        if (connected) {
-                            vm.sendMessage(
-                                draft,
-                                onError = onError,
-                                onSuccess = { draft = "" }
-                            )
-                        } else {
-                            onOpenBluetooth()
-                        }
-                    },
+                    onClick = sendCurrentDraft,
                     modifier = Modifier.height(52.dp),
                     shape = RoundedCornerShape(14.dp),
                     colors = ButtonDefaults.filledTonalButtonColors(

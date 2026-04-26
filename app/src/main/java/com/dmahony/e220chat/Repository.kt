@@ -22,12 +22,19 @@ import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.UUID
 
@@ -41,6 +48,7 @@ class E220Repository(context: Context) {
     private val exchangeMutex = Mutex()
     private val stateLock = Any()
     private val tag = "E220ChatRepo"
+    private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var bluetoothGatt: BluetoothGatt? = null
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
@@ -52,6 +60,10 @@ class E220Repository(context: Context) {
     private var responseBuffer = StringBuilder()
     private var cachedDevices: List<BluetoothDeviceInfo> = emptyList()
     private var transportLogs: List<TransportLogEntry> = emptyList()
+    private var reconnectJob: Job? = null
+    private var manualDisconnectRequested = false
+
+    var connectionEventListener: ((TransportConnectionEvent) -> Unit)? = null
 
     var darkTheme: Boolean
         get() = prefs.getBoolean(KEY_DARK_THEME, true)
@@ -99,7 +111,7 @@ class E220Repository(context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    suspend fun scanBleDevices(scanMillis: Long = 10000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
+    suspend fun scanBleDevices(scanMillis: Long = 20000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
         if (!hasBluetoothScanPermission()) {
             Log.w(tag, "Skipping BLE scan until Bluetooth permissions are granted")
             cachedDevices = emptyList()
@@ -195,6 +207,9 @@ class E220Repository(context: Context) {
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
+            manualDisconnectRequested = false
+            reconnectJob?.cancel()
+            reconnectJob = null
             if (!hasBluetoothConnectPermission()) {
                 throw ApiException("Grant Bluetooth permissions first")
             }
@@ -213,6 +228,12 @@ class E220Repository(context: Context) {
             selectedDeviceAddress = address
             selectedDeviceName = device.name ?: device.address
             appendTransportLog(TransportDirection.INFO, "Connecting to ${selectedDeviceName ?: address}")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.CONNECTING,
+                    message = "Connecting to ${selectedDeviceName ?: address}..."
+                )
+            )
             try {
                 withTimeout(CONNECT_TIMEOUT_MS) { connectDeferred.await() }
             } catch (e: Exception) {
@@ -220,18 +241,34 @@ class E220Repository(context: Context) {
                 throw ApiException(e.message ?: "Failed to connect to Bluetooth LE device")
             }
             appendTransportLog(TransportDirection.INFO, "Connected to ${selectedDeviceName ?: address}")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.CONNECTED,
+                    message = "Connected to ${selectedDeviceName ?: address}"
+                )
+            )
             BluetoothDeviceInfo(name = selectedDeviceName ?: device.address, address = address)
         }
     }
 
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         exchangeMutex.withLock {
+            manualDisconnectRequested = true
+            reconnectJob?.cancel()
+            reconnectJob = null
             appendTransportLog(TransportDirection.INFO, "Disconnected")
             closeGattLocked()
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.DISCONNECTED,
+                    message = "Bluetooth disconnected",
+                    manualDisconnect = true
+                )
+            )
         }
     }
 
-    suspend fun getChat(): ChatSnapshot = E220Protocol.parseChatResponse(exchange(E220Protocol.buildChatRequest()))
+    suspend fun getChat(sinceSequence: Int = 0): ChatSnapshot = E220Protocol.parseChatResponse(exchange(E220Protocol.buildChatRequest(sinceSequence)))
 
     suspend fun clearChatHistory() {
         exchange(E220Protocol.buildClearChatRequest())
@@ -326,8 +363,16 @@ class E220Repository(context: Context) {
                 },
                 onRetry = {
                     appendTransportLog(TransportDirection.INFO, "BLE link stale, reconnecting")
+                    connectionEventListener?.invoke(
+                        TransportConnectionEvent(
+                            state = TransportConnectionState.RECONNECTING,
+                            message = "Bluetooth link lost, reconnecting..."
+                        )
+                    )
                     closeGattLocked()
                     val address = selectedDeviceAddress ?: throw ApiException("Select a nearby E220 BLE device first")
+                    reconnectJob?.cancel()
+                    reconnectJob = null
                     runBlockingConnect(address)
                 }
             )
@@ -379,9 +424,17 @@ class E220Repository(context: Context) {
     private suspend fun ensureConnectedLocked() {
         if (isConnected) return
         val address = selectedDeviceAddress ?: throw ApiException("Select a nearby E220 BLE device first")
-        
+
+        val activeReconnectJob = reconnectJob
+        if (activeReconnectJob?.isActive == true) {
+            withTimeoutOrNull(AUTO_RECONNECT_WAIT_MS) {
+                activeReconnectJob.join()
+            }
+            if (isConnected) return
+        }
+
         // Avoid rapid reconnect loops: check if we just disconnected
-        delay(100) 
+        delay(100)
         runBlockingConnect(address)
     }
 
@@ -391,7 +444,7 @@ class E220Repository(context: Context) {
             ?: throw ApiException("Bluetooth LE is not available on this device")
         val connectDeferred = CompletableDeferred<Unit>()
         pendingConnect = connectDeferred
-        closeGattLocked()
+        closeGattLocked(triggerDisconnect = false)
         delay(CONNECT_RETRY_DELAY_MS)
         val gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             device.connectGatt(appContext, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -407,7 +460,7 @@ class E220Repository(context: Context) {
         }
     }
 
-    private fun closeGattLocked() {
+    private fun closeGattLocked(triggerDisconnect: Boolean = true) {
         synchronized(stateLock) {
             pendingConnect?.cancel()
             pendingWrite?.cancel()
@@ -419,16 +472,21 @@ class E220Repository(context: Context) {
             pendingResponse = null
             responseBuffer = StringBuilder()
         }
+        val currentGatt = bluetoothGatt
         try {
-            refreshGattCache()
+            if (triggerDisconnect) {
+                refreshGattCache()
+            }
         } catch (_: Exception) {
         }
         try {
-            bluetoothGatt?.disconnect()
+            if (triggerDisconnect) {
+                currentGatt?.disconnect()
+            }
         } catch (_: Exception) {
         }
         try {
-            bluetoothGatt?.close()
+            currentGatt?.close()
         } catch (_: Exception) {
         }
         bluetoothGatt = null
@@ -444,6 +502,101 @@ class E220Repository(context: Context) {
             refresh.invoke(gatt) as Boolean
         } catch (_: Exception) {
             false
+        }
+    }
+
+    private fun handleUnexpectedDisconnect(gatt: BluetoothGatt, status: Int) {
+        synchronized(stateLock) {
+            pendingResponse?.completeExceptionally(IOException("BLE disconnected"))
+            pendingWrite?.completeExceptionally(IOException("BLE disconnected"))
+            pendingDescriptorWrite?.completeExceptionally(IOException("BLE disconnected"))
+        }
+        if (pendingConnect?.isCompleted == false) {
+            pendingConnect?.completeExceptionally(IOException("BLE disconnected"))
+        }
+        bluetoothGatt = null
+        rxCharacteristic = null
+        txCharacteristic = null
+        try {
+            gatt.close()
+        } catch (_: Exception) {
+        }
+
+        val address = selectedDeviceAddress
+        val shouldReconnect = !manualDisconnectRequested && !address.isNullOrBlank()
+        appendTransportLog(
+            TransportDirection.INFO,
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                "BLE disconnected"
+            } else {
+                "BLE disconnected ($status)"
+            }
+        )
+        connectionEventListener?.invoke(
+            TransportConnectionEvent(
+                state = if (shouldReconnect) TransportConnectionState.RECONNECTING else TransportConnectionState.DISCONNECTED,
+                message = if (shouldReconnect) {
+                    "Bluetooth link lost, reconnecting..."
+                } else {
+                    "Bluetooth disconnected"
+                },
+                manualDisconnect = manualDisconnectRequested
+            )
+        )
+
+        if (shouldReconnect) {
+            scheduleAutoReconnect(address!!)
+        }
+    }
+
+    private fun scheduleAutoReconnect(address: String) {
+        if (manualDisconnectRequested) return
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = recoveryScope.launch {
+            try {
+                var attempt = 0
+                while (!manualDisconnectRequested) {
+                    if (selectedDeviceAddress != address) return@launch
+                    attempt++
+                    try {
+                        connectionEventListener?.invoke(
+                            TransportConnectionEvent(
+                                state = TransportConnectionState.RECONNECTING,
+                                message = if (attempt == 1) {
+                                    "Bluetooth link lost, reconnecting..."
+                                } else {
+                                    "Retrying Bluetooth reconnect ($attempt)"
+                                }
+                            )
+                        )
+                        runBlockingConnect(address)
+                        connectionEventListener?.invoke(
+                            TransportConnectionEvent(
+                                state = TransportConnectionState.CONNECTED,
+                                message = "Reconnected to ${selectedDeviceName ?: address}"
+                            )
+                        )
+                        return@launch
+                    } catch (e: Exception) {
+                        appendTransportLog(TransportDirection.INFO, "Bluetooth reconnect attempt $attempt failed: ${e.message ?: "unknown error"}")
+                        if (manualDisconnectRequested) return@launch
+                        if (attempt >= MAX_AUTO_RECONNECT_ATTEMPTS) {
+                            connectionEventListener?.invoke(
+                                TransportConnectionEvent(
+                                    state = TransportConnectionState.DISCONNECTED,
+                                    message = "Bluetooth reconnect failed"
+                                )
+                            )
+                            return@launch
+                        }
+                        delay(AUTO_RECONNECT_BACKOFF_MS * attempt)
+                    }
+                }
+            } finally {
+                if (reconnectJob?.isActive == false) {
+                    reconnectJob = null
+                }
+            }
         }
     }
 
@@ -481,7 +634,11 @@ class E220Repository(context: Context) {
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                pendingConnect?.completeExceptionally(IOException("BLE connect failed ($status)"))
+                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                    handleUnexpectedDisconnect(gatt, status)
+                } else {
+                    pendingConnect?.completeExceptionally(IOException("BLE connect failed ($status)"))
+                }
                 return
             }
             when (newState) {
@@ -492,16 +649,7 @@ class E220Repository(context: Context) {
                     }
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    appendTransportLog(TransportDirection.INFO, "BLE disconnected")
-                    pendingConnect?.completeExceptionally(IOException("BLE disconnected"))
-                    synchronized(stateLock) {
-                        pendingResponse?.completeExceptionally(IOException("BLE disconnected"))
-                        pendingWrite?.completeExceptionally(IOException("BLE disconnected"))
-                        pendingDescriptorWrite?.completeExceptionally(IOException("BLE disconnected"))
-                    }
-                    bluetoothGatt = null
-                    rxCharacteristic = null
-                    txCharacteristic = null
+                    handleUnexpectedDisconnect(gatt, status)
                 }
             }
         }
@@ -578,11 +726,16 @@ class E220Repository(context: Context) {
         private const val KEY_BT_DEVICE_ADDRESS = "bt_device_address"
         private const val KEY_BT_DEVICE_NAME = "bt_device_name"
         private const val MAX_TRANSPORT_LOGS = 200
-        private const val RESPONSE_TIMEOUT_MS = 10000L
+        // BLE responses are chunked in 20-byte notifications with a small delay between chunks.
+        // Chat/debug history can legitimately take longer than 20 seconds on larger payloads.
+        private const val RESPONSE_TIMEOUT_MS = 30000L
         private const val CONFIG_APPLY_TIMEOUT_MS = 12000L
         private const val WIFI_SCAN_TIMEOUT_MS = 15000L
         private const val CONNECT_TIMEOUT_MS = 20000L
         private const val CONNECT_RETRY_DELAY_MS = 250L
+        private const val AUTO_RECONNECT_WAIT_MS = 10000L
+        private const val AUTO_RECONNECT_BACKOFF_MS = 1200L
+        private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5
         private const val BLE_NAME_PREFIX = "E220-Chat-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E")
         private val NUS_RX_UUID: UUID = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E")
@@ -595,18 +748,28 @@ suspend fun <T> retryTransportFailure(
     block: suspend () -> T,
     onRetry: suspend () -> Unit
 ): T {
-    return try {
-        block()
-    } catch (e: Exception) {
-        if (e is IOException || e.message?.contains("ble", ignoreCase = true) == true || e.message?.contains("socket", ignoreCase = true) == true) {
-            // Log is handled by the repository calling this or via internal logs
-            delay(500)
+    var lastError: Exception? = null
+    repeat(3) { attempt ->
+        try {
+            return block()
+        } catch (e: Exception) {
+            lastError = e
+            val activeContext = runCatching { currentCoroutineContext()[Job]?.isActive == true }.getOrDefault(false)
+            val shouldRetry =
+                (e is java.util.concurrent.CancellationException && activeContext) ||
+                    e is IOException ||
+                    e is TimeoutCancellationException ||
+                    e.message?.contains("Timed out waiting", ignoreCase = true) == true ||
+                    e.message?.contains("ble", ignoreCase = true) == true ||
+                    e.message?.contains("socket", ignoreCase = true) == true
+            if (!shouldRetry || attempt == 2) {
+                throw e
+            }
+            delay(500L * (attempt + 1))
             onRetry()
-            block()
-        } else {
-            throw e
         }
     }
+    throw lastError ?: IOException("Transport retry failed")
 }
 
 fun readLineWithTimeout(input: java.io.InputStream, timeoutMs: Long): String {
