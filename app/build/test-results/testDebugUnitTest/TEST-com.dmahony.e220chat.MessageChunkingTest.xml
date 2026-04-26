@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.dmahony.e220chat.MessageChunkingTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-04-26T07:03:02.356Z" hostname="7070" time="0.003">
+  <properties/>
+  <testcase name="split message returns original text when it fits" classname="com.dmahony.e220chat.MessageChunkingTest" time="0.002"/>
+  <testcase name="split message breaks long text into byte-safe chunks" classname="com.dmahony.e220chat.MessageChunkingTest" time="0.001"/>
+  <testcase name="split message prefers whitespace boundaries when they fit" classname="com.dmahony.e220chat.MessageChunkingTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

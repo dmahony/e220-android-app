@@ -4,7 +4,7 @@
             "outputFile": "com.dmahony.e220chat.app-mergeDebugResources-66:/values-v22/values-v22.xml",
             "map": [
                 {
-                    "source": "/home/dan/.gradle/caches/transforms-3/e50c72ac408fd42a07e8aff14d9c5129/transformed/appcompat-1.6.1/res/values-v22/values-v22.xml",
+                    "source": "/home/dan/.gradle/caches/transforms-4/c8a72fda7889014782866c2efeaa1218/transformed/appcompat-1.6.1/res/values-v22/values-v22.xml",
                     "from": {
                         "startLines": "2,3,4,9",
                         "startColumns": "4,4,4,4",

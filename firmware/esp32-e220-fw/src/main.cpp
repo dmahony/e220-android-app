@@ -895,7 +895,7 @@ void setupWiFi() {
   strlcpy(wifi_config.ap_ssid, apSSID.c_str(), sizeof(wifi_config.ap_ssid));
   strlcpy(wifi_config.ap_password, apPass.c_str(), sizeof(wifi_config.ap_password));
 
-  bool wifiEnabled = preferences.isKey("wifi_enabled") ? preferences.getBool("wifi_enabled", true) : true;
+  bool wifiEnabled = preferences.isKey("wifi_enabled") ? preferences.getBool("wifi_enabled", false) : false;
   if (wifiEnabled) {
     WiFi.mode(WIFI_AP_STA);
     WiFi.softAP(wifi_config.ap_ssid, wifi_config.ap_password);

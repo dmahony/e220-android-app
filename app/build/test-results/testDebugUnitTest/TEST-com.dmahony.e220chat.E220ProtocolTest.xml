@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.dmahony.e220chat.E220ProtocolTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-04-19T07:52:39" hostname="7070" time="0.039">
+<testsuite name="com.dmahony.e220chat.E220ProtocolTest" tests="9" skipped="0" failures="0" errors="0" timestamp="2026-04-26T07:03:02.245Z" hostname="7070" time="0.11">
   <properties/>
-  <testcase name="parse diagnostics response reads nested firmware fields" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.009"/>
-  <testcase name="build config request nests values under config field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.01"/>
-  <testcase name="build send request nests message under body field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.0"/>
-  <testcase name="parse debug response returns nested log text" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.003"/>
-  <testcase name="parse chat response reads nested data messages and marks sent ones delivered" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.016"/>
+  <testcase name="build clear chat request posts to chat clear endpoint" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.096"/>
+  <testcase name="parse diagnostics response reads nested firmware fields" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.001"/>
+  <testcase name="build chat request includes since sequence when requested" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.001"/>
+  <testcase name="build config request nests values under config field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.006"/>
+  <testcase name="parse config response accepts flat web config object" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.0"/>
+  <testcase name="build send request nests message under body field" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.001"/>
+  <testcase name="parse debug response returns nested log text" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.0"/>
+  <testcase name="parse config response accepts nested data config object" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.001"/>
+  <testcase name="parse chat response reads nested data messages and marks sent ones delivered" classname="com.dmahony.e220chat.E220ProtocolTest" time="0.004"/>
   <system-out><![CDATA[]]></system-out>
   <system-err><![CDATA[]]></system-err>
 </testsuite>
