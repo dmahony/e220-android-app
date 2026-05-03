@@ -857,7 +857,7 @@ class E220Repository(context: Context) {
 
     private fun mapBleConfigToLegacy(cfg: BleConfig): E220Config {
         return E220Config(
-            freq = cfg.channel.toString(),
+            freq = String.format(java.util.Locale.US, "%.3f", 850.125 + cfg.channel),
             txpower = cfg.txpower.toString(),
             baud = cfg.baud.toString(),
             parity = cfg.parity.toString(),
@@ -892,7 +892,7 @@ class E220Repository(context: Context) {
             profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
             userId24 = userId,
             username = username,
-            channel = config.freq.split(" ").first().toDoubleOrNull()?.toInt() ?: current.channel,
+            channel = ((config.freq.toDoubleOrNull() ?: 930.125) - 850.125).toInt().coerceIn(0, 80),
             txpower = config.txpower.toIntOrNull() ?: current.txpower,
             baud = config.baud.toIntOrNull() ?: current.baud,
             parity = config.parity.toIntOrNull() ?: current.parity,
