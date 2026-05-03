@@ -59,6 +59,26 @@ struct Config {
   uint16_t profileIntervalSec = 900;
   uint32_t userId24 = 0x000001;
   char username[20] = "node";
+  // E220 radio config
+  uint8_t channel = 80;
+  uint8_t txpower = 21;
+  uint8_t baudIdx = 3;
+  uint8_t parity = 0;
+  uint8_t airrate = 2;
+  uint8_t txmode = 0;
+  uint8_t lbt = 0;
+  uint8_t subpkt = 0;
+  uint8_t rssiNoise = 0;
+  uint8_t rssiByte = 0;
+  uint8_t urxt = 0;
+  uint8_t worCycle = 3;
+  uint8_t cryptH = 0;
+  uint8_t cryptL = 0;
+  uint8_t saveType = 0;
+  uint16_t addr = 0x0000;
+  uint16_t dest = 0xFFFF;
+  uint8_t wifiEnabled = 0;
+  uint8_t wifiMode = 0;
 };
 
 struct PendingAck {
@@ -290,10 +310,18 @@ void pushProfileFrame() {
   gLastProfileMs = millis();
 }
 
+void applyConfigPayload(const uint8_t *p, uint8_t len);
+void emitConfigFrame(uint8_t seqToUse = 0);
+void readE220Config();
+
 void applyConfigPayload(const uint8_t *p, uint8_t len) {
-  // binary config payload:
-  // [ackTimeout:2][maxRetries:1][radioTxMs:2][statusMs:2][profileSec:2][userId:3][nameLen:1][name]
-  if (len < 13) return;
+  // binary config payload (matches BleConfig.toPayload()):
+  // [ackTimeout:2][maxRetries:1][radioTxMs:2][statusMs:2][profileSec:2][userId:3]
+  // [channel:1][txpower:1][baud:1][parity:1][airrate:1][txmode:1][lbt:1][subpkt:1]
+  // [rssiNoise:1][rssiByte:1][urxt:1][worCycle:1][cryptH:1][cryptL:1][saveType:1]
+  // [addr:2][dest:2][wifiEnabled:1][wifiMode:1]
+  // [nameLen:1][name:N][apSsidLen:1][apSsid:N][apPwdLen:1][apPwd:N]...
+  if (len < 33) return;
   uint16_t ack = ((uint16_t)p[0] << 8) | p[1];
   uint8_t retries = p[2];
   uint16_t radioInt = ((uint16_t)p[3] << 8) | p[4];
@@ -311,19 +339,43 @@ void applyConfigPayload(const uint8_t *p, uint8_t len) {
   gDeviceId[1] = p[10];
   gDeviceId[2] = p[11];
 
-  uint8_t nameLen = p[12];
-  if (13 + nameLen <= len) {
-    nameLen = min((uint8_t)19, nameLen);
-    memcpy(gCfg.username, p + 13, nameLen);
-    gCfg.username[nameLen] = '\0';
+  // Radio config fields (bytes 12-32)
+  gCfg.channel = p[12];
+  gCfg.txpower = p[13];
+  gCfg.baudIdx = p[14];
+  gCfg.parity = p[15];
+  gCfg.airrate = p[16];
+  gCfg.txmode = p[17];
+  gCfg.lbt = p[18];
+  gCfg.subpkt = p[19];
+  gCfg.rssiNoise = p[20];
+  gCfg.rssiByte = p[21];
+  gCfg.urxt = p[22];
+  gCfg.worCycle = p[23];
+  gCfg.cryptH = p[24];
+  gCfg.cryptL = p[25];
+  gCfg.saveType = p[26];
+  gCfg.addr = ((uint16_t)p[27] << 8) | p[28];
+  gCfg.dest = ((uint16_t)p[29] << 8) | p[30];
+  gCfg.wifiEnabled = p[31];
+  gCfg.wifiMode = p[32];
+
+  // Username (byte 33+)
+  if (len > 33) {
+    uint8_t nameLen = p[33];
+    if (34 + nameLen <= len) {
+      nameLen = min((uint8_t)19, nameLen);
+      memcpy(gCfg.username, p + 34, nameLen);
+      gCfg.username[nameLen] = '\0';
+    }
   }
 
   // mirror config characteristic
-  gConfigChar->setValue(p, len);
+  emitConfigFrame(); // re-emit with updated values
 }
 
-void emitConfigFrame(uint8_t seqToUse = 0) {
-  uint8_t payload[64];
+void emitConfigFrame(uint8_t seqToUse) {
+  uint8_t payload[128];
   size_t idx = 0;
   payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs >> 8);
   payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs & 0xFF);
@@ -337,10 +389,35 @@ void emitConfigFrame(uint8_t seqToUse = 0) {
   payload[idx++] = gDeviceId[0];
   payload[idx++] = gDeviceId[1];
   payload[idx++] = gDeviceId[2];
+  // Radio config (bytes 12-32, matches BleConfig.toPayload)
+  payload[idx++] = gCfg.channel;
+  payload[idx++] = gCfg.txpower;
+  payload[idx++] = gCfg.baudIdx;
+  payload[idx++] = gCfg.parity;
+  payload[idx++] = gCfg.airrate;
+  payload[idx++] = gCfg.txmode;
+  payload[idx++] = gCfg.lbt;
+  payload[idx++] = gCfg.subpkt;
+  payload[idx++] = gCfg.rssiNoise;
+  payload[idx++] = gCfg.rssiByte;
+  payload[idx++] = gCfg.urxt;
+  payload[idx++] = gCfg.worCycle;
+  payload[idx++] = gCfg.cryptH;
+  payload[idx++] = gCfg.cryptL;
+  payload[idx++] = gCfg.saveType;
+  payload[idx++] = (uint8_t)(gCfg.addr >> 8);
+  payload[idx++] = (uint8_t)(gCfg.addr & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.dest >> 8);
+  payload[idx++] = (uint8_t)(gCfg.dest & 0xFF);
+  payload[idx++] = gCfg.wifiEnabled;
+  payload[idx++] = gCfg.wifiMode;
+  // Username
   const uint8_t n = (uint8_t)min((size_t)19, strlen(gCfg.username));
   payload[idx++] = n;
   if (n > 0) memcpy(payload + idx, gCfg.username, n);
   idx += n;
+
+  gConfigChar->setValue(payload, idx);
 
   Frame c{};
   c.type = MSG_CONFIG;
@@ -349,7 +426,6 @@ void emitConfigFrame(uint8_t seqToUse = 0) {
   memcpy(c.payload, payload, idx);
   c.requireAck = true;
   gBleTxQueue.push(c);
-  gConfigChar->setValue(payload, idx);
 }
 
 // ========================= BLE callbacks =========================
@@ -425,6 +501,57 @@ void setupRadio() {
   digitalWrite(E220_M1_PIN, LOW);
 
   E220.begin(E220_UART_BAUD, SERIAL_8N1, E220_RX_PIN, E220_TX_PIN);
+  readE220Config();
+}
+
+// E220 register read (C1 00 06)
+static const int kE220BaudTable[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
+void readE220Config() {
+  digitalWrite(E220_M0_PIN, HIGH);
+  digitalWrite(E220_M1_PIN, HIGH);
+  delay(50);
+  // Wait for AUX HIGH (ready)
+  uint32_t start = millis();
+  while (digitalRead(E220_AUX_PIN) == LOW && millis() - start < 2000) delay(10);
+  if (digitalRead(E220_AUX_PIN) == LOW) {
+    Serial.println("[E220] AUX timeout - using defaults");
+    digitalWrite(E220_M0_PIN, LOW);
+    digitalWrite(E220_M1_PIN, LOW);
+    return;
+  }
+  // Flush and send read command
+  while (E220.available()) E220.read();
+  uint8_t cmd[] = {0xC1, 0x00, 0x06};
+  E220.write(cmd, 3);
+  E220.flush();
+  // Wait for 9-byte response
+  start = millis();
+  while (E220.available() < 9 && millis() - start < 1000) delay(10);
+  if (E220.available() >= 9) {
+    uint8_t hdr=E220.read(), st=E220.read(), ln=E220.read();
+    uint8_t addh=E220.read(), addl=E220.read();
+    uint8_t r0=E220.read(), r1=E220.read(), r2=E220.read(), r3=E220.read();
+    if (hdr==0xC1 && st==0x00 && ln==0x06) {
+      gCfg.channel = r2;
+      static const int pt[]={30,27,24,21};
+      gCfg.txpower = pt[r1 & 3];
+      gCfg.baudIdx = (r0 >> 5) & 7;
+      gCfg.parity = (r0 >> 3) & 3;
+      gCfg.airrate = r0 & 7;
+      gCfg.txmode = (r3 >> 6) & 1;
+      gCfg.lbt = (r3 >> 4) & 1;
+      gCfg.subpkt = (r1 >> 6) & 3;
+      gCfg.rssiNoise = (r1 >> 5) & 1;
+      gCfg.rssiByte = (r3 >> 7) & 1;
+      gCfg.worCycle = r3 & 7;
+      gCfg.addr = ((uint16_t)addh << 8) | addl;
+      Serial.printf("[E220] Read OK: ch=%d tx=%d baud=%d\n", r2, gCfg.txpower, kE220BaudTable[gCfg.baudIdx]);
+    }
+  } else {
+    Serial.printf("[E220] No response (%d bytes)\n", E220.available());
+  }
+  digitalWrite(E220_M0_PIN, LOW);
+  digitalWrite(E220_M1_PIN, LOW);
 }
 
 void sendBleFrame(const Frame &f) {
