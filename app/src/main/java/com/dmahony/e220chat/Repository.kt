@@ -69,6 +69,7 @@ class E220Repository(context: Context) {
         context = appContext,
         bluetoothAdapter = adapter,
         tag = "E220ChatRepo",
+        isDebuggableApp = isDebuggableApp,
         selectedDeviceAddressProvider = { selectedDeviceAddress },
         displayBluetoothName = ::displayBluetoothName
     )

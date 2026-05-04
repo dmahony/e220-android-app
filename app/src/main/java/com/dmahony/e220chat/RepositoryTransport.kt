@@ -390,7 +390,7 @@ internal fun E220Repository.appendTransportLog(direction: TransportDirection, pa
             TransportDirection.RECEIVED -> "ESP32 -> APP"
             TransportDirection.INFO -> "INFO"
         }
-        if (isDebuggableApp || direction == TransportDirection.INFO) {
+        if (isDebuggableApp) {
             Log.d(tag, "[$prefix] $safePayload")
         }
     }

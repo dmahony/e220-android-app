@@ -248,7 +248,7 @@ internal class LegacyBleTransport(
             TransportDirection.RECEIVED -> "ESP32 -> APP"
             TransportDirection.INFO -> "INFO"
         }
-        if (isDebuggableApp || direction == TransportDirection.INFO) {
+        if (isDebuggableApp) {
             android.util.Log.d(tag, "[$prefix] $safePayload")
         }
     }
