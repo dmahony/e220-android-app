@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class BleMessagingRepository(context: Context) {
@@ -60,6 +61,11 @@ class BleMessagingRepository(context: Context) {
 
     suspend fun connect(address: String) = manager.connect(address)
     fun disconnect() = manager.disconnect()
+
+    fun dispose() {
+        scope.cancel()
+        manager.dispose()
+    }
 
     suspend fun sendText(toUserId24: Int, message: String) = manager.sendText(toUserId24, message)
 

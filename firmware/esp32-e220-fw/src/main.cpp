@@ -171,6 +171,8 @@ uint32_t gLastProfileMs = 0;
 uint32_t gLastRadioTxMs = 0;
 uint32_t gLastFlowNotifyMs = 0;
 bool gBleClientConnected = false;
+uint16_t gBleConnHandle = 0;
+uint16_t gBleNotifyPayloadMax = 20;
 
 RingQueue<Frame, 32> gBleRxQueue;
 RingQueue<Frame, 32> gBleTxQueue;
@@ -216,6 +218,23 @@ size_t encodeFrame(const Frame &f, uint8_t *out, size_t outCap) {
   if (f.len > 0) memcpy(out + 4, f.payload, f.len);
   out[4 + f.len] = crcXor(out, 4 + f.len);
   return need;
+}
+
+uint16_t currentBleNotifyPayloadMax() {
+  return gBleNotifyPayloadMax < 20 ? 20 : gBleNotifyPayloadMax;
+}
+
+void notifyChunked(NimBLECharacteristic *c, const uint8_t *data, size_t len) {
+  if (!c || !gBleClientConnected || gBleConnHandle == 0 || data == nullptr || len == 0) return;
+
+  const size_t chunkSize = currentBleNotifyPayloadMax();
+  size_t offset = 0;
+  while (offset < len) {
+    const size_t chunkLen = min(chunkSize, len - offset);
+    c->notify(data + offset, chunkLen);
+    offset += chunkLen;
+    if (offset < len) delay(1);
+  }
 }
 
 bool decodeByte(StreamParser &p, uint8_t b, Frame &outFrame) {
@@ -355,7 +374,24 @@ void publishConfigCharacteristic() {
   uint8_t payload[256];
   size_t idx = 0;
   buildConfigPayload(payload, idx);
-  gConfigChar->setValue(payload, idx);
+  if (gConfigChar) {
+    gConfigChar->setValue(payload, idx);
+  }
+}
+
+void emitConfigFrame(uint8_t seqToUse) {
+  uint8_t payload[256];
+  size_t idx = 0;
+  buildConfigPayload(payload, idx);
+  if (gConfigChar) gConfigChar->setValue(payload, idx);
+
+  Frame c{};
+  c.type = MSG_CONFIG;
+  c.seq = seqToUse ? seqToUse : allocSeq();
+  c.len = (uint8_t)idx;
+  if (idx > 0) memcpy(c.payload, payload, idx);
+  c.requireAck = true;
+  gBleTxQueue.push(c);
 }
 
 bool refreshE220RadioConfig(bool logDetails = true) {
@@ -484,7 +520,7 @@ void pushStatusFrame(bool force) {
 
   // mirror in STATUS characteristic for read
   gStatusChar->setValue(payload, STATUS_PAYLOAD_LEN);
-  if (gBleClientConnected) gStatusChar->notify();
+  notifyChunked(gStatusChar, payload, STATUS_PAYLOAD_LEN);
 }
 
 void pushProfileFrame() {
@@ -582,17 +618,29 @@ void applyConfigPayload(const uint8_t *p, uint8_t len) {
 
 // ========================= BLE callbacks =========================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *pServer) override {
+  void onConnect(NimBLEServer *pServer, ble_gap_conn_desc *desc) override {
+    (void)pServer;
     gBleClientConnected = true;
+    gBleConnHandle = desc ? desc->conn_handle : 0;
+    gBleNotifyPayloadMax = 20;
     updateFlowState(FLOW_READY);
     pushStatusFrame(true);
     pushProfileFrame();
   }
 
-  void onDisconnect(NimBLEServer *pServer) override {
+  void onDisconnect(NimBLEServer *pServer, ble_gap_conn_desc *desc) override {
+    (void)pServer;
+    (void)desc;
     gBleClientConnected = false;
+    gBleConnHandle = 0;
+    gBleNotifyPayloadMax = 20;
     gPendingBleTx.active = false;
     NimBLEDevice::startAdvertising();
+  }
+
+  void onMTUChange(uint16_t MTU, ble_gap_conn_desc *desc) override {
+    (void)desc;
+    gBleNotifyPayloadMax = MTU > 3 ? (MTU - 3) : 20;
   }
 };
 
@@ -610,7 +658,9 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 
 class ConfigCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic *c) override {
-    refreshE220RadioConfig(false);
+    // Keep reads fast and deterministic. The cached gCfg is refreshed on boot
+    // and immediately after writes, so serving the cached payload avoids a slow
+    // E220 hardware round-trip inside the BLE read callback.
     publishConfigCharacteristic();
   }
 
@@ -668,8 +718,7 @@ void sendBleFrame(const Frame &f) {
   const size_t n = encodeFrame(f, raw, sizeof(raw));
   if (n == 0 || !gBleClientConnected) return;
 
-  gTxChar->setValue(raw, n);
-  gTxChar->notify();
+  notifyChunked(gTxChar, raw, n);
 
   if (f.requireAck) {
     gPendingBleTx.active = true;
@@ -702,8 +751,7 @@ void handlePendingAckTimeout() {
   gPendingBleTx.lastSendMs = now;
   uint8_t raw[260];
   const size_t n = encodeFrame(gPendingBleTx.frame, raw, sizeof(raw));
-  gTxChar->setValue(raw, n);
-  gTxChar->notify();
+  notifyChunked(gTxChar, raw, n);
 }
 
 void queueRadioTextFromBle(const Frame &in) {
