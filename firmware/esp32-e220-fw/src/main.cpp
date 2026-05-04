@@ -62,7 +62,7 @@ struct Config {
   // E220 radio config
   uint8_t channel = 80;
   uint8_t txpower = 21;
-  uint8_t baudIdx = 3;
+  uint8_t baud = 3;
   uint8_t parity = 0;
   uint8_t airrate = 2;
   uint8_t txmode = 0;
@@ -79,6 +79,10 @@ struct Config {
   uint16_t dest = 0xFFFF;
   uint8_t wifiEnabled = 0;
   uint8_t wifiMode = 0;
+  char wifiApSsid[32] = "";
+  char wifiApPassword[32] = "";
+  char wifiStaSsid[32] = "";
+  char wifiStaPassword[32] = "";
 };
 
 struct PendingAck {
@@ -102,6 +106,30 @@ struct StatusPayload {
   uint8_t fwPatch;
   uint8_t deviceId[3];
 };
+
+constexpr size_t STATUS_PAYLOAD_LEN = 18;
+
+void serializeStatusPayload(const StatusPayload &sp, uint8_t *out) {
+  size_t idx = 0;
+  out[idx++] = sp.flowState;
+  out[idx++] = (uint8_t)(sp.batteryMv >> 8);
+  out[idx++] = (uint8_t)(sp.batteryMv & 0xFF);
+  out[idx++] = (uint8_t)sp.lastRssi;
+  out[idx++] = sp.qBleRx;
+  out[idx++] = sp.qRadioTx;
+  out[idx++] = sp.qRadioRx;
+  out[idx++] = sp.qBleTx;
+  out[idx++] = (uint8_t)(sp.uptimeSec >> 24);
+  out[idx++] = (uint8_t)(sp.uptimeSec >> 16);
+  out[idx++] = (uint8_t)(sp.uptimeSec >> 8);
+  out[idx++] = (uint8_t)(sp.uptimeSec & 0xFF);
+  out[idx++] = sp.fwMaj;
+  out[idx++] = sp.fwMin;
+  out[idx++] = sp.fwPatch;
+  out[idx++] = sp.deviceId[0];
+  out[idx++] = sp.deviceId[1];
+  out[idx++] = sp.deviceId[2];
+}
 
 template<typename T, size_t N>
 class RingQueue {
@@ -235,6 +263,168 @@ bool decodeByte(StreamParser &p, uint8_t b, Frame &outFrame) {
   return false;
 }
 
+
+uint32_t e220BaudFromReg(uint8_t reg) {
+  static const uint32_t baudTable[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
+  return baudTable[reg & 0x07];
+}
+
+uint8_t e220TxPowerFromReg(uint8_t reg1) {
+  static const uint8_t powerTable[] = {30, 27, 24, 21};
+  return powerTable[reg1 & 0x03];
+}
+
+void setE220Mode(bool configMode) {
+  digitalWrite(E220_M0_PIN, configMode ? HIGH : LOW);
+  digitalWrite(E220_M1_PIN, configMode ? HIGH : LOW);
+  delay(50);
+}
+
+bool waitE220Ready(uint32_t timeoutMs = 2000) {
+  const uint32_t start = millis();
+  while (millis() - start < timeoutMs) {
+    if (digitalRead(E220_AUX_PIN) == HIGH) return true;
+    delay(10);
+  }
+  return false;
+}
+
+void setE220UARTBaud(uint32_t baud) {
+  E220.end();
+  delay(25);
+  E220.begin(baud, SERIAL_8N1, E220_RX_PIN, E220_TX_PIN);
+  delay(25);
+}
+
+void buildConfigPayload(uint8_t *payload, size_t &idx) {
+  payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs >> 8);
+  payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs & 0xFF);
+  payload[idx++] = gCfg.maxRetries;
+  payload[idx++] = (uint8_t)(gCfg.radioTxIntervalMs >> 8);
+  payload[idx++] = (uint8_t)(gCfg.radioTxIntervalMs & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.statusIntervalMs >> 8);
+  payload[idx++] = (uint8_t)(gCfg.statusIntervalMs & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.profileIntervalSec >> 8);
+  payload[idx++] = (uint8_t)(gCfg.profileIntervalSec & 0xFF);
+  payload[idx++] = (uint8_t)((gCfg.userId24 >> 16) & 0xFF);
+  payload[idx++] = (uint8_t)((gCfg.userId24 >> 8) & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.userId24 & 0xFF);
+  payload[idx++] = gCfg.channel;
+  payload[idx++] = gCfg.txpower;
+  payload[idx++] = gCfg.baud;
+  payload[idx++] = gCfg.parity;
+  payload[idx++] = gCfg.airrate;
+  payload[idx++] = gCfg.txmode;
+  payload[idx++] = gCfg.lbt;
+  payload[idx++] = gCfg.subpkt;
+  payload[idx++] = gCfg.rssiNoise;
+  payload[idx++] = gCfg.rssiByte;
+  payload[idx++] = gCfg.urxt;
+  payload[idx++] = gCfg.worCycle;
+  payload[idx++] = gCfg.cryptH;
+  payload[idx++] = gCfg.cryptL;
+  payload[idx++] = gCfg.saveType;
+  payload[idx++] = (uint8_t)((gCfg.addr >> 8) & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.addr & 0xFF);
+  payload[idx++] = (uint8_t)((gCfg.dest >> 8) & 0xFF);
+  payload[idx++] = (uint8_t)(gCfg.dest & 0xFF);
+  payload[idx++] = gCfg.wifiEnabled;
+  payload[idx++] = gCfg.wifiMode;
+
+  const uint8_t n = (uint8_t)min((size_t)19, strlen(gCfg.username));
+  payload[idx++] = n;
+  if (n > 0) memcpy(payload + idx, gCfg.username, n);
+  idx += n;
+
+  auto writeString = [&](const char *s, size_t maxLen) {
+    uint8_t len = (uint8_t)min((size_t)strlen(s), maxLen);
+    payload[idx++] = len;
+    if (len > 0) {
+      memcpy(payload + idx, s, len);
+      idx += len;
+    }
+  };
+
+  writeString(gCfg.wifiApSsid, 31);
+  writeString(gCfg.wifiApPassword, 31);
+  writeString(gCfg.wifiStaSsid, 31);
+  writeString(gCfg.wifiStaPassword, 31);
+}
+
+void publishConfigCharacteristic() {
+  uint8_t payload[256];
+  size_t idx = 0;
+  buildConfigPayload(payload, idx);
+  gConfigChar->setValue(payload, idx);
+}
+
+bool refreshE220RadioConfig(bool logDetails = true) {
+  setE220UARTBaud(E220_UART_BAUD);
+  setE220Mode(true);
+  delay(15);
+  if (!waitE220Ready(2000)) {
+    if (logDetails) Serial.println("[E220] Config mode failed - AUX timeout");
+    setE220Mode(false);
+    return false;
+  }
+
+  delay(50);
+  while (E220.available()) E220.read();
+
+  const uint8_t readCmd[3] = {0xC1, 0x00, 0x06};
+  E220.write(readCmd, sizeof(readCmd));
+  E220.flush();
+
+  const uint32_t timeout = millis() + 1000;
+  while (E220.available() < 9 && millis() < timeout) delay(10);
+  if (E220.available() < 9) {
+    if (logDetails) Serial.println("[E220] Read config failed - timeout");
+    while (E220.available()) E220.read();
+    setE220Mode(false);
+    return false;
+  }
+
+  uint8_t hdr = E220.read();
+  uint8_t start = E220.read();
+  uint8_t len = E220.read();
+  uint8_t addh = E220.read();
+  uint8_t addl = E220.read();
+  uint8_t reg0 = E220.read();
+  uint8_t reg1 = E220.read();
+  uint8_t reg2 = E220.read();
+  uint8_t reg3 = E220.read();
+
+  gCfg.addr = ((uint16_t)addh << 8) | addl;
+  gCfg.channel = reg2;
+  gCfg.txpower = e220TxPowerFromReg(reg1);
+  gCfg.baud = (uint8_t)e220BaudFromReg((reg0 >> 5) & 0x07);
+  gCfg.parity = (reg0 >> 3) & 0x03;
+  gCfg.airrate = reg0 & 0x07;
+  gCfg.subpkt = (reg1 >> 6) & 0x03;
+  gCfg.rssiNoise = (reg1 >> 5) & 0x01;
+  gCfg.rssiByte = (reg3 >> 7) & 0x01;
+  gCfg.txmode = (reg3 >> 6) & 0x01;
+  gCfg.lbt = (reg3 >> 4) & 0x01;
+  gCfg.worCycle = reg3 & 0x07;
+
+  if (logDetails) {
+    Serial.printf("[E220] Read config hdr=%02X start=%02X len=%02X addr=0x%02X%02X reg0=%02X reg1=%02X reg2=%02X reg3=%02X\n",
+                  hdr, start, len, addh, addl, reg0, reg1, reg2, reg3);
+    Serial.printf("[E220] Live radio channel=%u txpower=%u baud=%u parity=%u airrate=%u txmode=%u lbt=%u subpkt=%u rssiNoise=%u rssiByte=%u wor=%u\n",
+                  gCfg.channel, gCfg.txpower, gCfg.baud, gCfg.parity,
+                  gCfg.airrate, gCfg.txmode, gCfg.lbt, gCfg.subpkt,
+                  gCfg.rssiNoise, gCfg.rssiByte, gCfg.worCycle);
+  }
+
+  setE220Mode(false);
+  delay(50);
+  if (gCfg.baud != E220_UART_BAUD) {
+    setE220UARTBaud(gCfg.baud);
+  }
+  publishConfigCharacteristic();
+  return true;
+}
+
 void enqueueAck(uint8_t seq) {
   Frame ack{};
   ack.type = MSG_ACK;
@@ -281,16 +471,19 @@ void pushStatusFrame(bool force) {
   sp.fwPatch = 0;
   memcpy(sp.deviceId, gDeviceId, 3);
 
+  uint8_t payload[STATUS_PAYLOAD_LEN]{};
+  serializeStatusPayload(sp, payload);
+
   Frame s{};
   s.type = MSG_STATUS;
   s.seq = allocSeq();
-  s.len = sizeof(StatusPayload);
-  memcpy(s.payload, &sp, sizeof(StatusPayload));
+  s.len = STATUS_PAYLOAD_LEN;
+  memcpy(s.payload, payload, STATUS_PAYLOAD_LEN);
   s.requireAck = false;
   gBleTxQueue.push(s);
 
   // mirror in STATUS characteristic for read
-  gStatusChar->setValue((uint8_t*)&sp, sizeof(StatusPayload));
+  gStatusChar->setValue(payload, STATUS_PAYLOAD_LEN);
   if (gBleClientConnected) gStatusChar->notify();
 }
 
@@ -315,18 +508,39 @@ void emitConfigFrame(uint8_t seqToUse = 0);
 void readE220Config();
 
 void applyConfigPayload(const uint8_t *p, uint8_t len) {
-  // binary config payload (matches BleConfig.toPayload()):
-  // [ackTimeout:2][maxRetries:1][radioTxMs:2][statusMs:2][profileSec:2][userId:3]
-  // [channel:1][txpower:1][baud:1][parity:1][airrate:1][txmode:1][lbt:1][subpkt:1]
-  // [rssiNoise:1][rssiByte:1][urxt:1][worCycle:1][cryptH:1][cryptL:1][saveType:1]
-  // [addr:2][dest:2][wifiEnabled:1][wifiMode:1]
-  // [nameLen:1][name:N][apSsidLen:1][apSsid:N][apPwdLen:1][apPwd:N]...
+  // binary config payload:
+  // [ackTimeout:2][maxRetries:1][radioTxMs:2][statusMs:2][profileSec:2][userId:3][radioSettings:20][addr:2][dest:2][wifiEn:1][wifiMode:1][nameLen:1][name][apSsidLen:1][apSsid][apPwdLen:1][apPwd][staSsidLen:1][staSsid][staPwdLen:1][staPwd]
   if (len < 33) return;
-  uint16_t ack = ((uint16_t)p[0] << 8) | p[1];
-  uint8_t retries = p[2];
-  uint16_t radioInt = ((uint16_t)p[3] << 8) | p[4];
-  uint16_t statusInt = ((uint16_t)p[5] << 8) | p[6];
-  uint16_t profileSec = ((uint16_t)p[7] << 8) | p[8];
+
+  uint8_t i = 0;
+  uint16_t ack = ((uint16_t)p[i++] << 8) | p[i++];
+  uint8_t retries = p[i++];
+  uint16_t radioInt = ((uint16_t)p[i++] << 8) | p[i++];
+  uint16_t statusInt = ((uint16_t)p[i++] << 8) | p[i++];
+  uint16_t profileSec = ((uint16_t)p[i++] << 8) | p[i++];
+
+  uint32_t userId = ((uint32_t)p[i++] << 16) | ((uint32_t)p[i++] << 8) | p[i++];
+
+  gCfg.channel = p[i++];
+  gCfg.txpower = p[i++];
+  gCfg.baud = p[i++];
+  gCfg.parity = p[i++];
+  gCfg.airrate = p[i++];
+  gCfg.txmode = p[i++];
+  gCfg.lbt = p[i++];
+  gCfg.subpkt = p[i++];
+  gCfg.rssiNoise = p[i++];
+  gCfg.rssiByte = p[i++];
+  gCfg.urxt = p[i++];
+  gCfg.worCycle = p[i++];
+  gCfg.cryptH = p[i++];
+  gCfg.cryptL = p[i++];
+  gCfg.saveType = p[i++];
+
+  gCfg.addr = ((uint16_t)p[i++] << 8) | p[i++];
+  gCfg.dest = ((uint16_t)p[i++] << 8) | p[i++];
+  gCfg.wifiEnabled = p[i++];
+  gCfg.wifiMode = p[i++];
 
   gCfg.ackTimeoutMs = constrain(ack, (uint16_t)60, (uint16_t)2000);
   gCfg.maxRetries = constrain(retries, (uint8_t)1, (uint8_t)10);
@@ -334,98 +548,36 @@ void applyConfigPayload(const uint8_t *p, uint8_t len) {
   gCfg.statusIntervalMs = constrain(statusInt, (uint16_t)200, (uint16_t)5000);
   gCfg.profileIntervalSec = constrain(profileSec, (uint16_t)60, (uint16_t)3600);
 
-  gCfg.userId24 = ((uint32_t)p[9] << 16) | ((uint32_t)p[10] << 8) | p[11];
-  gDeviceId[0] = p[9];
-  gDeviceId[1] = p[10];
-  gDeviceId[2] = p[11];
+  gCfg.userId24 = userId;
+  gDeviceId[0] = (userId >> 16) & 0xFF;
+  gDeviceId[1] = (userId >> 8) & 0xFF;
+  gDeviceId[2] = userId & 0xFF;
 
-  // Radio config fields (bytes 12-32)
-  gCfg.channel = p[12];
-  gCfg.txpower = p[13];
-  gCfg.baudIdx = p[14];
-  gCfg.parity = p[15];
-  gCfg.airrate = p[16];
-  gCfg.txmode = p[17];
-  gCfg.lbt = p[18];
-  gCfg.subpkt = p[19];
-  gCfg.rssiNoise = p[20];
-  gCfg.rssiByte = p[21];
-  gCfg.urxt = p[22];
-  gCfg.worCycle = p[23];
-  gCfg.cryptH = p[24];
-  gCfg.cryptL = p[25];
-  gCfg.saveType = p[26];
-  gCfg.addr = ((uint16_t)p[27] << 8) | p[28];
-  gCfg.dest = ((uint16_t)p[29] << 8) | p[30];
-  gCfg.wifiEnabled = p[31];
-  gCfg.wifiMode = p[32];
-
-  // Username (byte 33+)
-  if (len > 33) {
-    uint8_t nameLen = p[33];
-    if (34 + nameLen <= len) {
-      nameLen = min((uint8_t)19, nameLen);
-      memcpy(gCfg.username, p + 34, nameLen);
-      gCfg.username[nameLen] = '\0';
-    }
+  uint8_t nameLen = p[i++];
+  if (i + nameLen <= len) {
+    nameLen = min((uint8_t)19, nameLen);
+    memcpy(gCfg.username, p + i, nameLen);
+    gCfg.username[nameLen] = '\0';
+    i += nameLen;
   }
 
-  // mirror config characteristic
-  emitConfigFrame(); // re-emit with updated values
-}
+  auto readString = [&](char *dest, size_t maxLen) {
+    if (i >= len) return;
+    uint8_t sLen = p[i++];
+    if (i + sLen <= len) {
+      uint8_t actual = (uint8_t)min((size_t)sLen, maxLen - 1);
+      memcpy(dest, p + i, actual);
+      dest[actual] = '\0';
+      i += sLen;
+    }
+  };
 
-void emitConfigFrame(uint8_t seqToUse) {
-  uint8_t payload[128];
-  size_t idx = 0;
-  payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs >> 8);
-  payload[idx++] = (uint8_t)(gCfg.ackTimeoutMs & 0xFF);
-  payload[idx++] = gCfg.maxRetries;
-  payload[idx++] = (uint8_t)(gCfg.radioTxIntervalMs >> 8);
-  payload[idx++] = (uint8_t)(gCfg.radioTxIntervalMs & 0xFF);
-  payload[idx++] = (uint8_t)(gCfg.statusIntervalMs >> 8);
-  payload[idx++] = (uint8_t)(gCfg.statusIntervalMs & 0xFF);
-  payload[idx++] = (uint8_t)(gCfg.profileIntervalSec >> 8);
-  payload[idx++] = (uint8_t)(gCfg.profileIntervalSec & 0xFF);
-  payload[idx++] = gDeviceId[0];
-  payload[idx++] = gDeviceId[1];
-  payload[idx++] = gDeviceId[2];
-  // Radio config (bytes 12-32, matches BleConfig.toPayload)
-  payload[idx++] = gCfg.channel;
-  payload[idx++] = gCfg.txpower;
-  payload[idx++] = gCfg.baudIdx;
-  payload[idx++] = gCfg.parity;
-  payload[idx++] = gCfg.airrate;
-  payload[idx++] = gCfg.txmode;
-  payload[idx++] = gCfg.lbt;
-  payload[idx++] = gCfg.subpkt;
-  payload[idx++] = gCfg.rssiNoise;
-  payload[idx++] = gCfg.rssiByte;
-  payload[idx++] = gCfg.urxt;
-  payload[idx++] = gCfg.worCycle;
-  payload[idx++] = gCfg.cryptH;
-  payload[idx++] = gCfg.cryptL;
-  payload[idx++] = gCfg.saveType;
-  payload[idx++] = (uint8_t)(gCfg.addr >> 8);
-  payload[idx++] = (uint8_t)(gCfg.addr & 0xFF);
-  payload[idx++] = (uint8_t)(gCfg.dest >> 8);
-  payload[idx++] = (uint8_t)(gCfg.dest & 0xFF);
-  payload[idx++] = gCfg.wifiEnabled;
-  payload[idx++] = gCfg.wifiMode;
-  // Username
-  const uint8_t n = (uint8_t)min((size_t)19, strlen(gCfg.username));
-  payload[idx++] = n;
-  if (n > 0) memcpy(payload + idx, gCfg.username, n);
-  idx += n;
+  readString(gCfg.wifiApSsid, 32);
+  readString(gCfg.wifiApPassword, 32);
+  readString(gCfg.wifiStaSsid, 32);
+  readString(gCfg.wifiStaPassword, 32);
 
-  gConfigChar->setValue(payload, idx);
-
-  Frame c{};
-  c.type = MSG_CONFIG;
-  c.seq = seqToUse == 0 ? allocSeq() : seqToUse;
-  c.len = (uint8_t)idx;
-  memcpy(c.payload, payload, idx);
-  c.requireAck = true;
-  gBleTxQueue.push(c);
+  publishConfigCharacteristic();
 }
 
 // ========================= BLE callbacks =========================
@@ -457,9 +609,16 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 class ConfigCallbacks : public NimBLECharacteristicCallbacks {
+  void onRead(NimBLECharacteristic *c) override {
+    refreshE220RadioConfig(false);
+    publishConfigCharacteristic();
+  }
+
   void onWrite(NimBLECharacteristic *c) override {
     std::string v = c->getValue();
     applyConfigPayload((const uint8_t*)v.data(), (uint8_t)v.size());
+    refreshE220RadioConfig(false);
+    publishConfigCharacteristic();
     pushProfileFrame();
   }
 };
@@ -501,57 +660,7 @@ void setupRadio() {
   digitalWrite(E220_M1_PIN, LOW);
 
   E220.begin(E220_UART_BAUD, SERIAL_8N1, E220_RX_PIN, E220_TX_PIN);
-  readE220Config();
-}
-
-// E220 register read (C1 00 06)
-static const int kE220BaudTable[] = {1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200};
-void readE220Config() {
-  digitalWrite(E220_M0_PIN, HIGH);
-  digitalWrite(E220_M1_PIN, HIGH);
-  delay(50);
-  // Wait for AUX HIGH (ready)
-  uint32_t start = millis();
-  while (digitalRead(E220_AUX_PIN) == LOW && millis() - start < 2000) delay(10);
-  if (digitalRead(E220_AUX_PIN) == LOW) {
-    Serial.println("[E220] AUX timeout - using defaults");
-    digitalWrite(E220_M0_PIN, LOW);
-    digitalWrite(E220_M1_PIN, LOW);
-    return;
-  }
-  // Flush and send read command
-  while (E220.available()) E220.read();
-  uint8_t cmd[] = {0xC1, 0x00, 0x06};
-  E220.write(cmd, 3);
-  E220.flush();
-  // Wait for 9-byte response
-  start = millis();
-  while (E220.available() < 9 && millis() - start < 1000) delay(10);
-  if (E220.available() >= 9) {
-    uint8_t hdr=E220.read(), st=E220.read(), ln=E220.read();
-    uint8_t addh=E220.read(), addl=E220.read();
-    uint8_t r0=E220.read(), r1=E220.read(), r2=E220.read(), r3=E220.read();
-    if (hdr==0xC1 && st==0x00 && ln==0x06) {
-      gCfg.channel = r2;
-      static const int pt[]={30,27,24,21};
-      gCfg.txpower = pt[r1 & 3];
-      gCfg.baudIdx = (r0 >> 5) & 7;
-      gCfg.parity = (r0 >> 3) & 3;
-      gCfg.airrate = r0 & 7;
-      gCfg.txmode = (r3 >> 6) & 1;
-      gCfg.lbt = (r3 >> 4) & 1;
-      gCfg.subpkt = (r1 >> 6) & 3;
-      gCfg.rssiNoise = (r1 >> 5) & 1;
-      gCfg.rssiByte = (r3 >> 7) & 1;
-      gCfg.worCycle = r3 & 7;
-      gCfg.addr = ((uint16_t)addh << 8) | addl;
-      Serial.printf("[E220] Read OK: ch=%d tx=%d baud=%d\n", r2, gCfg.txpower, kE220BaudTable[gCfg.baudIdx]);
-    }
-  } else {
-    Serial.printf("[E220] No response (%d bytes)\n", E220.available());
-  }
-  digitalWrite(E220_M0_PIN, LOW);
-  digitalWrite(E220_M1_PIN, LOW);
+  refreshE220RadioConfig(true);
 }
 
 void sendBleFrame(const Frame &f) {
@@ -639,6 +748,7 @@ void processBleRxQueue() {
 
       case MSG_CONFIG:
         applyConfigPayload(in.payload, in.len);
+        refreshE220RadioConfig(false);
         emitConfigFrame(in.seq);
         pushStatusFrame(true);
         break;

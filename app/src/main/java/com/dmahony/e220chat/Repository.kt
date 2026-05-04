@@ -43,9 +43,17 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlin.math.roundToInt
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.UUID
+
+internal fun freqStringToChannelOrFallback(freq: String, fallbackChannel: Int): Int {
+    val parsed = freq.trim().toDoubleOrNull()
+    if (parsed == null || !parsed.isFinite()) return fallbackChannel.coerceIn(0, 80)
+    val channel = (parsed - 850.125).roundToInt()
+    return if (channel in 0..80) channel else fallbackChannel.coerceIn(0, 80)
+}
 
 class ApiException(message: String) : Exception(message)
 
@@ -58,6 +66,7 @@ class E220Repository(context: Context) {
     private val stateLock = Any()
     private val tag = "E220ChatRepo"
     private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val isDebuggableApp = (appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     private var bluetoothGatt: BluetoothGatt? = null
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
@@ -68,6 +77,7 @@ class E220Repository(context: Context) {
     private var pendingResponse: CompletableDeferred<String>? = null
     private var responseBuffer = StringBuilder()
     private var cachedDevices: List<BluetoothDeviceInfo> = emptyList()
+    private var lastScanCompletedAtMs: Long = 0L
     private var transportLogs: List<TransportLogEntry> = emptyList()
     private var reconnectJob: Job? = null
     private var manualDisconnectRequested = false
@@ -75,7 +85,7 @@ class E220Repository(context: Context) {
     private var activeScanCallback: ScanCallback? = null
 
     private val bleV2 = BleUartManager(appContext)
-    private val useBinaryTransport = true
+    private val useBinaryTransport = false
     private val binaryChatMessages = mutableListOf<ChatMessage>()
     private var binaryChatSequence = 0
     private var binaryChatReset = false
@@ -166,6 +176,8 @@ class E220Repository(context: Context) {
             true
     }
 
+    private fun displayBluetoothName(name: String?): String = name?.takeIf { it.isNotBlank() } ?: "Unnamed device"
+
     @SuppressLint("MissingPermission")
     suspend fun scanBleDevices(scanMillis: Long = 20000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
         if (!hasBluetoothScanPermission()) {
@@ -185,12 +197,11 @@ class E220Repository(context: Context) {
                 )
 
         fun putDevice(target: MutableMap<String, BluetoothDeviceInfo>, address: String, name: String?) {
-            target[address] = BluetoothDeviceInfo(name = name?.takeIf { it.isNotBlank() } ?: address, address = address)
+            target[address] = BluetoothDeviceInfo(name = displayBluetoothName(name), address = address)
         }
 
         fun addBondedDevice(device: BluetoothDevice) {
             val name = device.name
-            if (name == null) return
             if (isExpectedName(name) || device.address == selectedDeviceAddress) {
                 putDevice(expectedResults, device.address, name)
             } else {
@@ -206,16 +217,14 @@ class E220Repository(context: Context) {
             val isSelectedDevice = device.address == selectedDeviceAddress
             Log.d(
                 tag,
-                "BLE scan found: addr=${device.address} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
+                "BLE scan found: addr=${redactBluetoothAddress(device.address)} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
             )
             if (hasExpectedName || hasExpectedService || isSelectedDevice) {
                 putDevice(expectedResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added expected device: ${device.address} (${advertisedName ?: "unnamed"}) total=${expectedResults.size}")
-            } else if (!advertisedName.isNullOrBlank()) {
-                putDevice(fallbackResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added fallback device: ${device.address} (${advertisedName}) total=${fallbackResults.size}")
+                Log.d(tag, "BLE scan added expected device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${expectedResults.size}")
             } else {
-                Log.d(tag, "BLE scan ignored unnamed device: ${device.address}")
+                putDevice(fallbackResults, device.address, advertisedName)
+                Log.d(tag, "BLE scan added fallback device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${fallbackResults.size}")
             }
         }
 
@@ -265,6 +274,7 @@ class E220Repository(context: Context) {
         val chosen = if (expectedResults.isNotEmpty()) expectedResults else fallbackResults
         val discovered = chosen.values.sortedWith(compareBy<BluetoothDeviceInfo> { it.name.lowercase() }.thenBy { it.address })
         cachedDevices = discovered
+        lastScanCompletedAtMs = System.currentTimeMillis()
         discovered
     }
 
@@ -293,7 +303,7 @@ class E220Repository(context: Context) {
             }
             val device = adapter?.getRemoteDevice(address)
                 ?: throw ApiException("Bluetooth LE is not available on this device")
-            val name = device.name ?: device.address
+            val name = displayBluetoothName(device.name)
             selectedDeviceAddress = address
             selectedDeviceName = name
             manualDisconnectRequested = false
@@ -411,7 +421,7 @@ class E220Repository(context: Context) {
 
     suspend fun getConfig(): E220Config {
         if (useBinaryTransport) {
-            val cfg = runCatching { bleV2.readConfigCharacteristic() }.getOrElse { binaryConfig } ?: defaultBinaryConfig()
+            val cfg = bleV2.readConfigCharacteristic()
             binaryConfig = cfg
             return mapBleConfigToLegacy(cfg)
         }
@@ -422,8 +432,9 @@ class E220Repository(context: Context) {
         if (useBinaryTransport) {
             val cfg = mapLegacyConfigToBle(config)
             bleV2.writeConfig(cfg)
-            binaryConfig = cfg
-            return@withContext mapBleConfigToLegacy(cfg)
+            val live = bleV2.readConfigCharacteristic()
+            binaryConfig = live
+            return@withContext mapBleConfigToLegacy(live)
         }
 
         val response = exchange(E220Protocol.buildConfigRequest(config))
@@ -614,9 +625,18 @@ class E220Repository(context: Context) {
         }
     }
 
+    private fun isDeviceVisibleInRecentScan(address: String?): Boolean {
+        if (address.isNullOrBlank()) return false
+        if (System.currentTimeMillis() - lastScanCompletedAtMs > RECENT_SCAN_VISIBILITY_WINDOW_MS) return false
+        return cachedDevices.any { it.address.equals(address, ignoreCase = true) }
+    }
+
     private suspend fun ensureConnectedLocked() {
         if (isConnected) return
         val address = selectedDeviceAddress ?: throw ApiException("Select a nearby E220 BLE device first")
+        if (!isDeviceVisibleInRecentScan(address)) {
+            throw ApiException("Saved BLE device is not visible in the current scan. Refresh Bluetooth devices and select the ESP32 again.")
+        }
 
         val activeReconnectJob = reconnectJob
         if (activeReconnectJob?.isActive == true) {
@@ -639,7 +659,7 @@ class E220Repository(context: Context) {
     }
 
     private suspend fun connectWithRetryLocked(device: BluetoothDevice): BluetoothDeviceInfo {
-        val deviceName = device.name ?: device.address
+        val deviceName = displayBluetoothName(device.name)
         var lastError: Exception? = null
         repeat(CONNECT_MAX_ATTEMPTS) { attempt ->
             stopBleScan()
@@ -652,6 +672,9 @@ class E220Repository(context: Context) {
             } catch (e: Exception) {
                 lastError = e
                 closeGattLocked()
+                if (isBluetoothCacheStaleError(e)) {
+                    throw e
+                }
             }
         }
         throw ApiException(lastError?.message ?: "Failed to connect to Bluetooth LE device")
@@ -783,12 +806,32 @@ class E220Repository(context: Context) {
 
     private fun scheduleAutoReconnect(address: String) {
         if (manualDisconnectRequested) return
+        if (!isDeviceVisibleInRecentScan(address)) {
+            appendTransportLog(TransportDirection.INFO, "Skipping BLE auto-reconnect because $address is not visible in the current scan")
+            connectionEventListener?.invoke(
+                TransportConnectionEvent(
+                    state = TransportConnectionState.DISCONNECTED,
+                    message = "Saved BLE device is not visible in the current scan"
+                )
+            )
+            return
+        }
         if (reconnectJob?.isActive == true) return
         reconnectJob = recoveryScope.launch {
             try {
                 var attempt = 0
                 while (!manualDisconnectRequested) {
                     if (selectedDeviceAddress != address) return@launch
+                    if (!isDeviceVisibleInRecentScan(address)) {
+                        appendTransportLog(TransportDirection.INFO, "Stopping BLE auto-reconnect because $address is no longer visible")
+                        connectionEventListener?.invoke(
+                            TransportConnectionEvent(
+                                state = TransportConnectionState.DISCONNECTED,
+                                message = "Saved BLE device is not visible in the current scan"
+                            )
+                        )
+                        return@launch
+                    }
                     attempt++
                     try {
                         connectionEventListener?.invoke(
@@ -811,6 +854,15 @@ class E220Repository(context: Context) {
                         return@launch
                     } catch (e: Exception) {
                         appendTransportLog(TransportDirection.INFO, "Bluetooth reconnect attempt $attempt failed: ${e.message ?: "unknown error"}")
+                        if (isBluetoothCacheStaleError(e)) {
+                            connectionEventListener?.invoke(
+                                TransportConnectionEvent(
+                                    state = TransportConnectionState.DISCONNECTED,
+                                    message = "Bluetooth cache is stale. Forget this device in Bluetooth settings, then re-pair and reconnect."
+                                )
+                            )
+                            return@launch
+                        }
                         if (manualDisconnectRequested) return@launch
                         if (attempt >= MAX_AUTO_RECONNECT_ATTEMPTS) {
                             connectionEventListener?.invoke(
@@ -832,14 +884,51 @@ class E220Repository(context: Context) {
         }
     }
 
+    private fun isBluetoothCacheStaleError(e: Exception): Boolean {
+        val message = e.message.orEmpty()
+        return message.contains("status 133", ignoreCase = true) ||
+            message.contains("Bluetooth cache is stale", ignoreCase = true)
+    }
+
+    private fun redactBluetoothAddress(value: String): String {
+        val parts = value.split(":")
+        return if (parts.size == 6 && parts.all { it.length == 2 }) {
+            parts.take(3).joinToString(":") + ":**:**:**"
+        } else {
+            value
+        }
+    }
+
+    private fun redactSensitiveFields(payload: String): String {
+        fun redactField(input: String, fieldName: String): String =
+            input.replace(Regex("""(?i)(\"$fieldName\"\s*:\s*\")[^\"]*(\")"""), "$1<redacted>$2")
+
+        var sanitized = payload
+        for (field in listOf("password", "wifi_ap_password", "wifi_sta_password")) {
+            sanitized = redactField(sanitized, field)
+        }
+        if (!isDebuggableApp) {
+            for (field in listOf("message", "ssid", "wifi_ap_ssid", "wifi_sta_ssid")) {
+                sanitized = redactField(sanitized, field)
+            }
+        }
+        sanitized = sanitized.replace(Regex("(?i)\\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\\b")) { matchResult ->
+            redactBluetoothAddress(matchResult.value)
+        }
+        return sanitized
+    }
+
     private fun appendTransportLog(direction: TransportDirection, payload: String) {
-        transportLogs = (transportLogs + TransportLogEntry(direction = direction, payload = payload)).takeLast(MAX_TRANSPORT_LOGS)
+        val safePayload = redactSensitiveFields(payload)
+        transportLogs = (transportLogs + TransportLogEntry(direction = direction, payload = safePayload)).takeLast(MAX_TRANSPORT_LOGS)
         val prefix = when (direction) {
             TransportDirection.SENT -> "APP -> ESP32"
             TransportDirection.RECEIVED -> "ESP32 -> APP"
             TransportDirection.INFO -> "INFO"
         }
-        Log.d(tag, "[$prefix] $payload")
+        if (isDebuggableApp || direction == TransportDirection.INFO) {
+            Log.d(tag, "[$prefix] $safePayload")
+        }
     }
 
     private fun parseDestinationUserId(): Int {
@@ -852,12 +941,45 @@ class E220Repository(context: Context) {
         val suffix = if (address.length >= 6) address.takeLast(6) else "000001"
         val id = suffix.toIntOrNull(16)?.coerceIn(1, 0xFFFFFF) ?: 1
         val user = "u${suffix.uppercase()}".take(19)
-        return BleConfig(userId24 = id, username = user)
+        return BleConfig(
+            ackTimeoutMs = 180,
+            maxRetries = 4,
+            radioTxIntervalMs = 90,
+            statusIntervalMs = 1000,
+            profileIntervalSec = 900,
+            userId24 = id,
+            username = user,
+            channel = 0,
+            txpower = 21,
+            baud = 9600,
+            parity = 0,
+            airrate = 2,
+            txmode = 0,
+            lbt = 0,
+            subpkt = 0,
+            rssiNoise = 0,
+            rssiByte = 0,
+            urxt = 3,
+            worCycle = 3,
+            cryptH = 0,
+            cryptL = 0,
+            saveType = 1,
+            addr = id,
+            dest = 0xFFFF
+        )
     }
+
+    private fun channelToFreqString(channel: Int): String = String.format(java.util.Locale.US, "%.3f", 850.125 + channel.coerceIn(0, 80))
+
+    private fun parseHex16(value: String, fallback: Int): Int =
+        value.removePrefix("0x").removePrefix("0X").toIntOrNull(16)?.coerceIn(0, 0xFFFF) ?: fallback
+
+    private fun parseHex24(value: String, fallback: Int): Int =
+        value.removePrefix("0x").removePrefix("0X").toIntOrNull(16)?.coerceIn(1, 0xFFFFFF) ?: fallback
 
     private fun mapBleConfigToLegacy(cfg: BleConfig): E220Config {
         return E220Config(
-            freq = String.format(java.util.Locale.US, "%.3f", 850.125 + cfg.channel),
+            freq = channelToFreqString(cfg.channel),
             txpower = cfg.txpower.toString(),
             baud = cfg.baud.toString(),
             parity = cfg.parity.toString(),
@@ -874,15 +996,24 @@ class E220Repository(context: Context) {
             lbrTimeout = cfg.ackTimeoutMs.toString(),
             lbrRssi = cfg.statusIntervalMs.toString(),
             saveType = cfg.profileIntervalSec.toString(),
-            addr = "0x${cfg.userId24.toString(16).padStart(6, '0').uppercase()}",
-            dest = "0xFFFFFF"
+            addr = "0x${cfg.addr.toString(16).padStart(4, '0').uppercase()}",
+            dest = "0x${cfg.dest.toString(16).padStart(4, '0').uppercase()}",
+            wifiEnabled = cfg.wifiEnabled.toString(),
+            wifiMode = when (cfg.wifiMode) {
+                1 -> "STA"
+                2 -> "AP_STA"
+                else -> "AP"
+            },
+            wifiApSsid = cfg.wifiApSsid,
+            wifiApPassword = cfg.wifiApPassword,
+            wifiStaSsid = cfg.wifiStaSsid,
+            wifiStaPassword = cfg.wifiStaPassword
         )
     }
 
     private fun mapLegacyConfigToBle(config: E220Config): BleConfig {
         val current = binaryConfig ?: defaultBinaryConfig()
-        val userId = config.addr.removePrefix("0x").removePrefix("0X").toIntOrNull(16)?.coerceIn(1, 0xFFFFFF)
-            ?: current.userId24
+        val userId = parseHex24(config.addr, current.userId24)
         val username = (config.wifiApSsid.ifBlank { current.username }).take(19)
         return BleConfig(
             ackTimeoutMs = config.lbrTimeout.toIntOrNull()?.coerceIn(60, 2000) ?: current.ackTimeoutMs,
@@ -892,7 +1023,7 @@ class E220Repository(context: Context) {
             profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
             userId24 = userId,
             username = username,
-            channel = ((config.freq.toDoubleOrNull() ?: 930.125) - 850.125).toInt().coerceIn(0, 80),
+            channel = freqStringToChannelOrFallback(config.freq, current.channel),
             txpower = config.txpower.toIntOrNull() ?: current.txpower,
             baud = config.baud.toIntOrNull() ?: current.baud,
             parity = config.parity.toIntOrNull() ?: current.parity,
@@ -907,8 +1038,8 @@ class E220Repository(context: Context) {
             cryptH = config.cryptH.toIntOrNull() ?: current.cryptH,
             cryptL = config.cryptL.toIntOrNull() ?: current.cryptL,
             saveType = config.saveType.toIntOrNull() ?: current.saveType,
-            addr = config.addr.removePrefix("0x").removePrefix("0X").toIntOrNull(16) ?: current.addr,
-            dest = config.dest.removePrefix("0x").removePrefix("0X").toIntOrNull(16) ?: current.dest,
+            addr = parseHex16(config.addr, current.addr),
+            dest = parseHex16(config.dest, current.dest),
             wifiEnabled = config.wifiEnabled.toIntOrNull() ?: current.wifiEnabled,
             wifiMode = config.wifiMode.toIntOrNull() ?: current.wifiMode,
             wifiApSsid = config.wifiApSsid,
@@ -980,7 +1111,19 @@ class E220Repository(context: Context) {
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (status != BluetoothGatt.GATT_SUCCESS) {
-                if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                if (status == 133) {
+                    appendTransportLog(TransportDirection.INFO, "BLE status 133: refreshing Bluetooth cache")
+                    try {
+                        refreshGattCache()
+                    } catch (_: Exception) {
+                    }
+                    closeGattLocked(triggerDisconnect = false)
+                    pendingConnect?.completeExceptionally(
+                        ApiException(
+                            "Bluetooth cache is stale (status 133). Forget this device in Bluetooth settings, then re-pair and reconnect."
+                        )
+                    )
+                } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                     handleUnexpectedDisconnect(gatt, status)
                 } else {
                     pendingConnect?.completeExceptionally(IOException("BLE connect failed ($status)"))
@@ -1087,6 +1230,7 @@ class E220Repository(context: Context) {
         private const val AUTO_RECONNECT_WAIT_MS = 10000L
         private const val AUTO_RECONNECT_BACKOFF_MS = 1200L
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5
+        private const val RECENT_SCAN_VISIBILITY_WINDOW_MS = 10000L
         private const val BLE_NAME_PREFIX = "E220-BLE-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("9f6d0001-6f52-4d94-b43f-2ef6f3ed7a10")
         private val NUS_RX_UUID: UUID = UUID.fromString("9f6d0002-6f52-4d94-b43f-2ef6f3ed7a10")

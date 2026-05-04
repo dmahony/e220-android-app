@@ -106,13 +106,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (repo.selectedDeviceAddress.isNullOrBlank()) {
             viewModelScope.launch { refreshBluetoothDevices() }
         } else {
-            autoConnectLastDevice()
-            viewModelScope.launch {
-                delay(1200)
-                if (!repo.isConnected) {
-                    refreshBluetoothDevices()
-                }
-            }
+            viewModelScope.launch { refreshBluetoothDevices(autoConnectSavedDevice = true) }
         }
         refreshAllIfConnected()
         syncTransportLogs()
@@ -128,7 +122,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         darkTheme = repo.darkTheme
     }
 
-    fun refreshBluetoothDevices() {
+    fun refreshBluetoothDevices(autoConnectSavedDevice: Boolean = false) {
         viewModelScope.launch {
             isScanning = true
             try {
@@ -148,6 +142,15 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             if (selectedBluetoothName.isBlank() && selectedBluetoothAddress.isNotBlank()) {
                 selectedBluetoothName = bluetoothDevices.firstOrNull { it.address == selectedBluetoothAddress }?.name.orEmpty()
             }
+            if (autoConnectSavedDevice && selectedBluetoothAddress.isNotBlank()) {
+                val visible = bluetoothDevices.any { it.address.equals(selectedBluetoothAddress, ignoreCase = true) }
+                if (visible) {
+                    autoConnectLastDevice()
+                } else {
+                    connectionHint = "Saved BLE device is not visible in the current scan"
+                    connectionState = ConnectionState.DISCONNECTED
+                }
+            }
         }
     }
 
@@ -164,6 +167,12 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (startupAutoConnectAttempted) return
         val address = repo.selectedDeviceAddress.orEmpty()
         if (address.isBlank()) return
+        val visible = bluetoothDevices.any { it.address.equals(address, ignoreCase = true) }
+        if (!visible) {
+            connectionHint = "Saved BLE device is not visible in the current scan"
+            connectionState = ConnectionState.DISCONNECTED
+            return
+        }
         startupAutoConnectAttempted = true
         val name = repo.selectedDeviceName.orEmpty().ifBlank { address }
         connectBluetooth(BluetoothDeviceInfo(name = name, address = address), onError = {})
@@ -192,18 +201,25 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 }
                 configStatus = null
                 clearConnectionErrors()
-                delay(250)
-                refreshConfig()
-                refreshDiagnostics()
-                syncTransportLogs()
+                viewModelScope.launch {
+                    delay(1000)
+                    refreshConfig()
+                    refreshDiagnostics()
+                    syncTransportLogs()
+                }
                 onSuccess()
             } catch (e: Exception) {
                 val rebooting = shouldSuppressTransientRebootError(e)
-                connectionState = if (rebooting) ConnectionState.CONNECTING else ConnectionState.ERROR
-                val msg = if (rebooting) {
-                    "ESP32 is rebooting, reconnecting..."
-                } else {
-                    e.message ?: "Bluetooth connection failed"
+                val cacheStale = isBluetoothCacheStaleError(e)
+                connectionState = when {
+                    rebooting -> ConnectionState.CONNECTING
+                    cacheStale -> ConnectionState.ERROR
+                    else -> ConnectionState.ERROR
+                }
+                val msg = when {
+                    rebooting -> "ESP32 is rebooting, reconnecting..."
+                    cacheStale -> "Bluetooth cache is stale. Forget this device in Bluetooth settings, then re-pair and reconnect."
+                    else -> e.message ?: "Bluetooth connection failed"
                 }
                 connectionHint = msg
                 syncTransportLogs()
@@ -241,10 +257,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (enabled) {
             viewModelScope.launch {
                 try {
-                    refreshBluetoothDevices()
-                    if (repo.selectedDeviceAddress.orEmpty().isNotBlank() && !repo.isConnected) {
-                        reconnectSavedDevice(onError = {})
-                    }
+                    refreshBluetoothDevices(autoConnectSavedDevice = true)
                 } catch (_: Exception) {
                 }
             }
@@ -468,10 +481,13 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             return
         }
         if (configRefreshJob?.isActive == true) return
+        configStatus = "Loading radio config..."
+        configError = null
         configRefreshJob = viewModelScope.launch {
             try {
                 config = repo.getConfig()
                 configError = null
+                configStatus = "Radio config loaded"
                 syncTransportLogs()
             } catch (e: Exception) {
                 if (shouldSuppressTransientRebootError(e)) {
@@ -480,6 +496,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     configStatus = "ESP32 is rebooting, reconnecting..."
                 } else if (!rebootInProgress) {
                     configError = e.message ?: "Config load failed"
+                    configStatus = null
                 }
                 syncTransportLogs()
             } finally {
@@ -509,6 +526,12 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             "crypt_h" -> config.copy(cryptH = value)
             "crypt_l" -> config.copy(cryptL = value)
             "savetype" -> config.copy(saveType = value)
+            "wifi_enabled" -> config.copy(wifiEnabled = value)
+            "wifi_mode" -> config.copy(wifiMode = value)
+            "wifi_ap_ssid" -> config.copy(wifiApSsid = value)
+            "wifi_ap_password" -> config.copy(wifiApPassword = value)
+            "wifi_sta_ssid" -> config.copy(wifiStaSsid = value)
+            "wifi_sta_password" -> config.copy(wifiStaPassword = value)
             else -> config
         }
     }
@@ -1009,6 +1032,12 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         return message.contains("Unknown BLE API request", ignoreCase = true) ||
             message.contains("/api/wifi", ignoreCase = true) ||
             message.contains("WiFi controls aren't supported", ignoreCase = true)
+    }
+
+    private fun isBluetoothCacheStaleError(e: Exception): Boolean {
+        val message = e.message.orEmpty()
+        return message.contains("status 133", ignoreCase = true) ||
+            message.contains("Bluetooth cache is stale", ignoreCase = true)
     }
 
     private fun syncTransportLogs() {

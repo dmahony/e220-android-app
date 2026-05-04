@@ -14,19 +14,20 @@ fun splitMessageForRadio(message: String, maxChunkBytes: Int = DEFAULT_RADIO_CHU
         var lastWhitespaceEnd = -1
 
         while (end < message.length) {
-            val ch = message[end]
-            val charBytes = ch.toString().toByteArray(Charsets.UTF_8).size
-            if (byteCount + charBytes > maxChunkBytes) break
-            byteCount += charBytes
-            end++
-            if (ch.isWhitespace()) {
+            val codePoint = Character.codePointAt(message, end)
+            val charCount = Character.charCount(codePoint)
+            val codePointBytes = utf8ByteCount(codePoint)
+            if (byteCount + codePointBytes > maxChunkBytes) break
+            byteCount += codePointBytes
+            end += charCount
+            if (Character.isWhitespace(codePoint)) {
                 lastWhitespaceEnd = end
             }
         }
 
         if (end == index) {
             // A single code point exceeded the limit. Emit it alone so progress continues.
-            end = (index + 1).coerceAtMost(message.length)
+            end = (index + Character.charCount(Character.codePointAt(message, index))).coerceAtMost(message.length)
         } else if (end < message.length && lastWhitespaceEnd > index) {
             end = lastWhitespaceEnd
         }
@@ -37,10 +38,19 @@ fun splitMessageForRadio(message: String, maxChunkBytes: Int = DEFAULT_RADIO_CHU
         }
 
         index = end
-        while (index < message.length && message[index].isWhitespace()) {
-            index++
+        while (index < message.length) {
+            val codePoint = Character.codePointAt(message, index)
+            if (!Character.isWhitespace(codePoint)) break
+            index += Character.charCount(codePoint)
         }
     }
 
     return if (chunks.isEmpty()) listOf(message.trim()) else chunks
+}
+
+private fun utf8ByteCount(codePoint: Int): Int = when {
+    codePoint <= 0x7F -> 1
+    codePoint <= 0x7FF -> 2
+    codePoint <= 0xFFFF -> 3
+    else -> 4
 }

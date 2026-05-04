@@ -96,15 +96,17 @@ class BleUartManager(context: Context) {
 
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String) = withContext(Dispatchers.IO) {
+        if (!hasConnectPermission()) throw SecurityException("BLUETOOTH_CONNECT not granted")
+
+        val device = adapter?.getRemoteDevice(address) ?: throw IOException("No BLE adapter/device")
+        val cd = CompletableDeferred<Unit>()
+        val dd = CompletableDeferred<Unit>()
+
         ioMutex.withLock {
-            if (!hasConnectPermission()) throw SecurityException("BLUETOOTH_CONNECT not granted")
             connectedAddress = address
             reconnectJob?.cancel()
             closeGatt()
 
-            val device = adapter?.getRemoteDevice(address) ?: throw IOException("No BLE adapter/device")
-            val cd = CompletableDeferred<Unit>()
-            val dd = CompletableDeferred<Unit>()
             pendingConnect = cd
             pendingDiscover = dd
             gatt = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
@@ -112,10 +114,11 @@ class BleUartManager(context: Context) {
             } else {
                 device.connectGatt(app, false, callback)
             }
-            withTimeout(CONNECT_TIMEOUT_MS) {
-                cd.await()
-                dd.await()
-            }
+        }
+
+        withTimeout(CONNECT_TIMEOUT_MS) {
+            cd.await()
+            dd.await()
         }
     }
 

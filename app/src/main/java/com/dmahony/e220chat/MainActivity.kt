@@ -27,6 +27,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -222,6 +224,7 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     vm = vm,
                     modifier = Modifier.weight(1f),
                     onOpenBluetooth = openBluetoothPicker,
+                    onReconnectBluetooth = { vm.reconnectSavedDevice { Toast.makeText(context, it, Toast.LENGTH_LONG).show() } },
                     onGpsCommand = requestGpsLocation,
                     onClearMessages = clearChatMessages,
                     onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
@@ -272,6 +275,7 @@ private fun ChatScreen(
     vm: E220ChatViewModel,
     modifier: Modifier = Modifier,
     onOpenBluetooth: () -> Unit,
+    onReconnectBluetooth: () -> Unit,
     onGpsCommand: () -> Unit,
     onClearMessages: () -> Unit,
     onError: (String) -> Unit
@@ -330,7 +334,9 @@ private fun ChatScreen(
             connectionHint = vm.connectionHint,
             selectedDeviceName = vm.selectedBluetoothName,
             connected = vm.connectionState == ConnectionState.CONNECTED,
-            onOpenBluetooth = onOpenBluetooth
+            canReconnect = vm.selectedBluetoothAddress.isNotBlank(),
+            onOpenBluetooth = onOpenBluetooth,
+            onReconnectBluetooth = onReconnectBluetooth
         )
 
         Box(
@@ -483,7 +489,9 @@ private fun CompactConnectionBanner(
     connectionHint: String,
     selectedDeviceName: String,
     connected: Boolean,
-    onOpenBluetooth: () -> Unit
+    canReconnect: Boolean,
+    onOpenBluetooth: () -> Unit,
+    onReconnectBluetooth: () -> Unit
 ) {
     val transition = rememberInfiniteTransition(label = "linkGlow")
     val glowPulse by transition.animateFloat(
@@ -549,11 +557,27 @@ private fun CompactConnectionBanner(
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            TextButton(
-                onClick = onOpenBluetooth,
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-            ) {
-                Text(if (connected) "Manage" else "Connect")
+            if (connected) {
+                TextButton(
+                    onClick = onOpenBluetooth,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("Manage")
+                }
+            } else if (canReconnect) {
+                TextButton(
+                    onClick = onReconnectBluetooth,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("Reconnect")
+                }
+            } else {
+                TextButton(
+                    onClick = onOpenBluetooth,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                ) {
+                    Text("Connect")
+                }
             }
         }
     }
@@ -610,6 +634,11 @@ private fun BluetoothDeviceDialog(
                             )
                         } else {
                             Text("Refresh")
+                        }
+                    }
+                    if (vm.selectedBluetoothAddress.isNotBlank()) {
+                        OutlinedButton(onClick = { onConnect(BluetoothDeviceInfo(name = vm.selectedBluetoothName.ifBlank { "Unnamed device" }, address = vm.selectedBluetoothAddress)) }) {
+                            Text("Reconnect last device")
                         }
                     }
                     if (vm.connectionState == ConnectionState.CONNECTED) {
@@ -848,6 +877,13 @@ private fun SettingsScreen(
     modifier: Modifier = Modifier
 ) {
     val scroll = rememberScrollState()
+
+    LaunchedEffect(vm.selectedTab, vm.connectionState) {
+        if (vm.selectedTab == AppTab.RADIO && vm.connectionState == ConnectionState.CONNECTED) {
+            onRefresh()
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -1003,6 +1039,56 @@ private fun SettingsScreen(
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("crypt_l", it) }
+                }
+            }
+
+            ConfigSectionCard(
+                title = "WiFi settings",
+                subtitle = "Mirror the ESP32 WiFi config fields returned by the firmware."
+            ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DropdownConfigField(
+                        label = "WiFi enabled",
+                        selectedValue = vm.config.wifiEnabled,
+                        options = onOffOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_enabled", it) }
+                    DropdownConfigField(
+                        label = "WiFi mode",
+                        selectedValue = vm.config.wifiMode,
+                        options = wifiModeOptions,
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_mode", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "AP SSID",
+                        value = vm.config.wifiApSsid,
+                        supportingText = "Access point name broadcast by the ESP32.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_ap_ssid", it) }
+                    ConfigField(
+                        label = "AP password",
+                        value = vm.config.wifiApPassword,
+                        isPassword = true,
+                        supportingText = "Password for the ESP32 access point.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_ap_password", it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ConfigField(
+                        label = "STA SSID",
+                        value = vm.config.wifiStaSsid,
+                        supportingText = "Upstream network name for station mode.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_sta_ssid", it) }
+                    ConfigField(
+                        label = "STA password",
+                        value = vm.config.wifiStaPassword,
+                        isPassword = true,
+                        supportingText = "Password for the upstream WiFi network.",
+                        modifier = Modifier.weight(1f)
+                    ) { vm.setConfigField("wifi_sta_password", it) }
                 }
             }
 
@@ -1222,6 +1308,7 @@ private fun ConfigField(
     value: String,
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
+    isPassword: Boolean = false,
     supportingText: String? = null,
     onValueChange: (String) -> Unit
 ) {
@@ -1232,6 +1319,7 @@ private fun ConfigField(
         label = { Text(label) },
         supportingText = supportingText?.let { { Text(it) } },
         singleLine = true,
+        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(
             keyboardType = keyboardType,
             imeAction = ImeAction.Next
@@ -1322,6 +1410,7 @@ private fun WifiScreen(
     val scroll = rememberScrollState()
     var selectedNetwork by remember { mutableStateOf<WifiNetwork?>(null) }
     var wifiPassword by remember { mutableStateOf("") }
+    var apPasswordDraft by remember(vm.wifiStatus.apPassword) { mutableStateOf(vm.wifiStatus.apPassword) }
     val wifiSupported = vm.wifiApiSupported
 
     Column(
@@ -1409,17 +1498,29 @@ private fun WifiScreen(
                 }
 
                 if (vm.wifiStatus.mode == "AP") {
-                    ConfigField(
-                        label = "AP Password",
-                        value = vm.wifiStatus.apPassword,
-                        supportingText = "Set the password for the ESP32 Access Point.",
-                        modifier = Modifier.fillMaxWidth()
-                    ) { pwd ->
-                        vm.setWifiApPassword(
-                            pwd,
-                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                            onSuccess = { vm.refreshWifi() }
-                        )
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ConfigField(
+                            label = "AP Password",
+                            value = apPasswordDraft,
+                            supportingText = "Set the password for the ESP32 Access Point.",
+                            modifier = Modifier.fillMaxWidth(),
+                            isPassword = true
+                        ) { pwd ->
+                            apPasswordDraft = pwd
+                        }
+                        Button(
+                            onClick = {
+                                vm.setWifiApPassword(
+                                    apPasswordDraft,
+                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
+                                    onSuccess = { vm.refreshWifi() }
+                                )
+                            },
+                            enabled = apPasswordDraft != vm.wifiStatus.apPassword,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Save AP password")
+                        }
                     }
                 }
             }
@@ -1688,6 +1789,7 @@ private fun WifiScreen(
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                     shape = RoundedCornerShape(14.dp),
+                                    visualTransformation = PasswordVisualTransformation(),
                                     keyboardOptions = KeyboardOptions(
                                         keyboardType = KeyboardType.Password,
                                         imeAction = ImeAction.Done

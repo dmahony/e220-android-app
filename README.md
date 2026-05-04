@@ -64,6 +64,7 @@ The app talks to the device over BLE using JSON messages with endpoints such as:
 - `app/src/main/res/` - resources and themes
 - `app/src/test/` - unit tests
 - `firmware/esp32-e220-fw/` - ESP32 companion firmware
+- `web-app/` - separate Chrome-installable Web Bluetooth PWA version
 
 ## Notes
 

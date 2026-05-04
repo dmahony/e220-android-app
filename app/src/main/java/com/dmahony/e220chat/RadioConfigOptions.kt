@@ -52,6 +52,12 @@ val onOffOptions = listOf(
     "On (1)" to "1"
 )
 
+val wifiModeOptions = listOf(
+    "AP" to "AP",
+    "STA" to "STA",
+    "AP + STA" to "AP_STA"
+)
+
 val packetLengthOptions = listOf(
     "200 bytes (0)" to "0",
     "128 bytes (1)" to "1",
