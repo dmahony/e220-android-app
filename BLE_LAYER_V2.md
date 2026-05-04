@@ -106,8 +106,8 @@ C) Device discovery/profile
 
 5) Code locations
 
-ESP32 firmware main .ino:
-- firmware/esp32-e220-fw/esp32_e220_ble.ino
+ESP32 firmware entrypoint:
+- firmware/esp32-e220-fw/src/main.cpp
 
 Android BLE data/domain files:
 - app/src/main/java/com/dmahony/e220chat/ble/BleTypes.kt
@@ -141,7 +141,7 @@ Android logs to print:
 8) Testing instructions
 
 Firmware
-1. Build and flash firmware/esp32-e220-fw/esp32_e220_ble.ino on two ESP32+E220 nodes.
+1. Build and flash the PlatformIO project in `firmware/esp32-e220-fw` on two ESP32+E220 nodes.
 2. Ensure wiring:
    E220 RX->GPIO21, TX->GPIO22, M0->GPIO25, M1->GPIO26, AUX->GPIO27.
 3. Verify both nodes advertise BLE name E220-BLE-XXXXXX.

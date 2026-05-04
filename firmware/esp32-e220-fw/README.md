@@ -5,33 +5,26 @@ It runs on an ESP32 + Ebyte E220 LoRa module, exposes a BLE GATT link to the And
 
 ## What it does
 
-- Pairs with the Android app over Bluetooth LE (BLE) GATT
-- Sends and receives newline-delimited JSON messages
+- Exposes a Bluetooth LE (BLE) GATT link for the Android app
+- Uses a binary framed protocol over BLE
 - Keeps the E220 chat/config behavior from the original project
 - Stores configuration in ESP32 Preferences
 - Uses UART2 to talk to the E220 module
 
 ## Bluetooth protocol
 
-The Android app talks to the firmware over a simple JSON request/response stream.
-Example request:
+The Android app talks to the firmware over a binary framed protocol, not JSON.
+See `../../BLE_LAYER_V2.md` for the frame format, message types, and payloads.
 
-```json
-{"path":"/api/config","method":"GET"}
-```
+The firmware uses these message types:
 
-Typical endpoints handled by the firmware:
-
-- `/api/chat`
-- `/api/send`
-- `/api/config`
-- `/api/operation`
-- `/api/debug`
-- `/api/debug/clear`
-- `/api/diagnostics`
-- `/api/reboot`
-
-Responses are returned as JSON strings over Bluetooth.
+- `TEXT`
+- `ACK`
+- `STATUS`
+- `CONFIG`
+- `PROFILE`
+- `ERROR`
+- `WHOIS`
 
 ## Hardware
 
@@ -113,4 +106,6 @@ After upload, the ESP32 should reset automatically. If it does not, press EN/RES
 
 - This firmware is Bluetooth-only; it does not expose an HTTP interface at runtime.
 - The E220 radio link still uses the module's UART interface internally.
+- The canonical firmware implementation lives in `src/main.cpp`.
+- The legacy top-level `esp32_e220_ble.ino` is kept only as a reference stub.
 - If you change the Bluetooth device name or protocol, update the Android app to match.
