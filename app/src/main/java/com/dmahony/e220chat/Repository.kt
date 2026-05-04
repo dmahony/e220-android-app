@@ -11,11 +11,6 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
-import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
-import android.bluetooth.le.ScanResult
-import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -64,9 +59,9 @@ class E220Repository(context: Context) {
     private val adapter: BluetoothAdapter? = bluetoothManager.adapter
     private val exchangeMutex = Mutex()
     private val stateLock = Any()
-    private val tag = "E220ChatRepo"
     private val recoveryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val isDebuggableApp = (appContext.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    private val tag = "E220ChatRepo"
 
     private var bluetoothGatt: BluetoothGatt? = null
     private var rxCharacteristic: BluetoothGattCharacteristic? = null
@@ -76,15 +71,18 @@ class E220Repository(context: Context) {
     private var pendingDescriptorWrite: CompletableDeferred<Unit>? = null
     private var pendingResponse: CompletableDeferred<String>? = null
     private var responseBuffer = StringBuilder()
-    private var cachedDevices: List<BluetoothDeviceInfo> = emptyList()
-    private var lastScanCompletedAtMs: Long = 0L
     private var transportLogs: List<TransportLogEntry> = emptyList()
     private var reconnectJob: Job? = null
     private var manualDisconnectRequested = false
-    private var activeScanScanner: BluetoothLeScanner? = null
-    private var activeScanCallback: ScanCallback? = null
 
     private val bleV2 = BleUartManager(appContext)
+    private val bleScanner = BleScanner(
+        context = appContext,
+        bluetoothAdapter = adapter,
+        tag = "E220ChatRepo",
+        selectedDeviceAddressProvider = { selectedDeviceAddress },
+        displayBluetoothName = ::displayBluetoothName
+    )
     private val useBinaryTransport = false
     private val binaryChatMessages = mutableListOf<ChatMessage>()
     private var binaryChatSequence = 0
@@ -156,18 +154,9 @@ class E220Repository(context: Context) {
     val isConnected: Boolean
         get() = if (useBinaryTransport) bleV2.connected.value else (bluetoothGatt != null && rxCharacteristic != null && txCharacteristic != null)
 
-    fun getPairedDevices(): List<BluetoothDeviceInfo> = cachedDevices
+    fun getPairedDevices(): List<BluetoothDeviceInfo> = bleScanner.getPairedDevices()
 
     fun getTransportLogs(): List<TransportLogEntry> = transportLogs
-
-    private fun hasBluetoothScanPermission(): Boolean = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
-            ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(appContext, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED &&
-                ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        else ->
-            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-    }
 
     private fun hasBluetoothConnectPermission(): Boolean = when {
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
@@ -179,121 +168,9 @@ class E220Repository(context: Context) {
     private fun displayBluetoothName(name: String?): String = name?.takeIf { it.isNotBlank() } ?: "Unnamed device"
 
     @SuppressLint("MissingPermission")
-    suspend fun scanBleDevices(scanMillis: Long = 20000L): List<BluetoothDeviceInfo> = withContext(Dispatchers.IO) {
-        if (!hasBluetoothScanPermission()) {
-            Log.w(tag, "Skipping BLE scan until Bluetooth permissions are granted")
-            cachedDevices = emptyList()
-            return@withContext emptyList()
-        }
+    suspend fun scanBleDevices(scanMillis: Long = 20000L): List<BluetoothDeviceInfo> = bleScanner.scanBleDevices(scanMillis)
 
-        val expectedResults = linkedMapOf<String, BluetoothDeviceInfo>()
-        val fallbackResults = linkedMapOf<String, BluetoothDeviceInfo>()
-
-        fun isExpectedName(name: String?): Boolean =
-            name != null && (
-                name.startsWith(BLE_NAME_PREFIX, ignoreCase = true) ||
-                    name.contains("E220", ignoreCase = true) ||
-                    name.contains("ESP32", ignoreCase = true)
-                )
-
-        fun putDevice(target: MutableMap<String, BluetoothDeviceInfo>, address: String, name: String?) {
-            target[address] = BluetoothDeviceInfo(name = displayBluetoothName(name), address = address)
-        }
-
-        fun addBondedDevice(device: BluetoothDevice) {
-            val name = device.name
-            if (isExpectedName(name) || device.address == selectedDeviceAddress) {
-                putDevice(expectedResults, device.address, name)
-            } else {
-                putDevice(fallbackResults, device.address, name)
-            }
-        }
-
-        fun addScanResult(result: ScanResult) {
-            val device = result.device
-            val advertisedName = result.scanRecord?.deviceName ?: device.name
-            val hasExpectedName = isExpectedName(advertisedName)
-            val hasExpectedService = result.scanRecord?.serviceUuids?.any { it.uuid == NUS_SERVICE_UUID } == true
-            val isSelectedDevice = device.address == selectedDeviceAddress
-            Log.d(
-                tag,
-                "BLE scan found: addr=${redactBluetoothAddress(device.address)} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
-            )
-            if (hasExpectedName || hasExpectedService || isSelectedDevice) {
-                putDevice(expectedResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added expected device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${expectedResults.size}")
-            } else {
-                putDevice(fallbackResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added fallback device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${fallbackResults.size}")
-            }
-        }
-
-        adapter?.bondedDevices?.forEach { bonded ->
-            addBondedDevice(bonded)
-        }
-
-        val scanner = adapter?.bluetoothLeScanner
-        if (scanner != null) {
-            val scanCallback = object : ScanCallback() {
-                override fun onScanResult(callbackType: Int, result: ScanResult) {
-                    addScanResult(result)
-                }
-
-                override fun onBatchScanResults(resultsBatch: MutableList<ScanResult>) {
-                    resultsBatch.forEach(::addScanResult)
-                }
-
-                override fun onScanFailed(errorCode: Int) {
-                    Log.w(tag, "BLE scan failed with code $errorCode")
-                }
-            }
-
-            val settings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                .build()
-
-            synchronized(stateLock) {
-                activeScanScanner = scanner
-                activeScanCallback = scanCallback
-            }
-            scanner.startScan(emptyList(), settings, scanCallback)
-            try {
-                delay(scanMillis)
-            } finally {
-                try {
-                    scanner.stopScan(scanCallback)
-                } catch (_: Exception) {
-                }
-                synchronized(stateLock) {
-                    if (activeScanCallback === scanCallback) activeScanCallback = null
-                    if (activeScanScanner === scanner) activeScanScanner = null
-                }
-            }
-        }
-
-        val chosen = if (expectedResults.isNotEmpty()) expectedResults else fallbackResults
-        val discovered = chosen.values.sortedWith(compareBy<BluetoothDeviceInfo> { it.name.lowercase() }.thenBy { it.address })
-        cachedDevices = discovered
-        lastScanCompletedAtMs = System.currentTimeMillis()
-        discovered
-    }
-
-    fun stopBleScan() {
-        val scanner: BluetoothLeScanner?
-        val callback: ScanCallback?
-        synchronized(stateLock) {
-            scanner = activeScanScanner
-            callback = activeScanCallback
-            activeScanScanner = null
-            activeScanCallback = null
-        }
-        if (scanner != null && callback != null) {
-            try {
-                scanner.stopScan(callback)
-            } catch (_: Exception) {
-            }
-        }
-    }
+    fun stopBleScan() = bleScanner.stopBleScan()
 
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
@@ -625,16 +502,10 @@ class E220Repository(context: Context) {
         }
     }
 
-    private fun isDeviceVisibleInRecentScan(address: String?): Boolean {
-        if (address.isNullOrBlank()) return false
-        if (System.currentTimeMillis() - lastScanCompletedAtMs > RECENT_SCAN_VISIBILITY_WINDOW_MS) return false
-        return cachedDevices.any { it.address.equals(address, ignoreCase = true) }
-    }
-
     private suspend fun ensureConnectedLocked() {
         if (isConnected) return
         val address = selectedDeviceAddress ?: throw ApiException("Select a nearby E220 BLE device first")
-        if (!isDeviceVisibleInRecentScan(address)) {
+        if (!bleScanner.isDeviceVisibleInRecentScan(address)) {
             throw ApiException("Saved BLE device is not visible in the current scan. Refresh Bluetooth devices and select the ESP32 again.")
         }
 
@@ -806,7 +677,7 @@ class E220Repository(context: Context) {
 
     private fun scheduleAutoReconnect(address: String) {
         if (manualDisconnectRequested) return
-        if (!isDeviceVisibleInRecentScan(address)) {
+        if (!bleScanner.isDeviceVisibleInRecentScan(address)) {
             appendTransportLog(TransportDirection.INFO, "Skipping BLE auto-reconnect because $address is not visible in the current scan")
             connectionEventListener?.invoke(
                 TransportConnectionEvent(
@@ -822,7 +693,7 @@ class E220Repository(context: Context) {
                 var attempt = 0
                 while (!manualDisconnectRequested) {
                     if (selectedDeviceAddress != address) return@launch
-                    if (!isDeviceVisibleInRecentScan(address)) {
+                    if (!bleScanner.isDeviceVisibleInRecentScan(address)) {
                         appendTransportLog(TransportDirection.INFO, "Stopping BLE auto-reconnect because $address is no longer visible")
                         connectionEventListener?.invoke(
                             TransportConnectionEvent(
@@ -1012,6 +883,7 @@ class E220Repository(context: Context) {
     }
 
     private fun mapLegacyConfigToBle(config: E220Config): BleConfig {
+        requireValidConfig(config)
         val current = binaryConfig ?: defaultBinaryConfig()
         val userId = parseHex24(config.addr, current.userId24)
         val username = (config.wifiApSsid.ifBlank { current.username }).take(19)
@@ -1230,8 +1102,6 @@ class E220Repository(context: Context) {
         private const val AUTO_RECONNECT_WAIT_MS = 10000L
         private const val AUTO_RECONNECT_BACKOFF_MS = 1200L
         private const val MAX_AUTO_RECONNECT_ATTEMPTS = 5
-        private const val RECENT_SCAN_VISIBILITY_WINDOW_MS = 10000L
-        private const val BLE_NAME_PREFIX = "E220-BLE-"
         private val NUS_SERVICE_UUID: UUID = UUID.fromString("9f6d0001-6f52-4d94-b43f-2ef6f3ed7a10")
         private val NUS_RX_UUID: UUID = UUID.fromString("9f6d0002-6f52-4d94-b43f-2ef6f3ed7a10")
         private val NUS_TX_UUID: UUID = UUID.fromString("9f6d0003-6f52-4d94-b43f-2ef6f3ed7a10")

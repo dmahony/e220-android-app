@@ -932,6 +932,7 @@ private fun SettingsScreen(
                         label = "Channel / frequency",
                         selectedValue = vm.config.freq,
                         options = channelOptions,
+                        errorText = vm.configFieldErrors["freq"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("freq", it) }
                     DropdownConfigField(
@@ -1000,6 +1001,7 @@ private fun SettingsScreen(
                         label = "URXT",
                         value = vm.config.urxt,
                         supportingText = "Manual range: 1–255 byte times. Default 3.",
+                        errorText = vm.configFieldErrors["urxt"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("urxt", it) }
@@ -1015,12 +1017,14 @@ private fun SettingsScreen(
                         label = "Address",
                         value = vm.config.addr,
                         supportingText = "Manual range: 0–65535. 65535 is broadcast.",
+                        errorText = vm.configFieldErrors["addr"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("addr", it) }
                     ConfigField(
                         label = "Destination",
                         value = vm.config.dest,
                         supportingText = "Manual range: 0–65535. Defaults to 65535.",
+                        errorText = vm.configFieldErrors["dest"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("dest", it) }
                 }
@@ -1029,6 +1033,7 @@ private fun SettingsScreen(
                         label = "Crypto high",
                         value = vm.config.cryptH,
                         supportingText = "App-specific 16-bit key high byte.",
+                        errorText = vm.configFieldErrors["crypt_h"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("crypt_h", it) }
@@ -1036,6 +1041,7 @@ private fun SettingsScreen(
                         label = "Crypto low",
                         value = vm.config.cryptL,
                         supportingText = "App-specific 16-bit key low byte.",
+                        errorText = vm.configFieldErrors["crypt_l"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("crypt_l", it) }
@@ -1065,6 +1071,7 @@ private fun SettingsScreen(
                         label = "AP SSID",
                         value = vm.config.wifiApSsid,
                         supportingText = "Access point name broadcast by the ESP32.",
+                        errorText = vm.configFieldErrors["wifi_ap_ssid"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("wifi_ap_ssid", it) }
                     ConfigField(
@@ -1072,6 +1079,7 @@ private fun SettingsScreen(
                         value = vm.config.wifiApPassword,
                         isPassword = true,
                         supportingText = "Password for the ESP32 access point.",
+                        errorText = vm.configFieldErrors["wifi_ap_password"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("wifi_ap_password", it) }
                 }
@@ -1080,6 +1088,7 @@ private fun SettingsScreen(
                         label = "STA SSID",
                         value = vm.config.wifiStaSsid,
                         supportingText = "Upstream network name for station mode.",
+                        errorText = vm.configFieldErrors["wifi_sta_ssid"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("wifi_sta_ssid", it) }
                     ConfigField(
@@ -1087,6 +1096,7 @@ private fun SettingsScreen(
                         value = vm.config.wifiStaPassword,
                         isPassword = true,
                         supportingText = "Password for the upstream WiFi network.",
+                        errorText = vm.configFieldErrors["wifi_sta_password"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("wifi_sta_password", it) }
                 }
@@ -1115,6 +1125,7 @@ private fun SettingsScreen(
                         label = "LBT RSSI",
                         value = vm.config.lbrRssi,
                         supportingText = "Manual range: 0 to -128 dBm. Default -55.",
+                        errorText = vm.configFieldErrors["lbr_rssi"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("lbr_rssi", it) }
@@ -1122,6 +1133,7 @@ private fun SettingsScreen(
                         label = "LBT timeout",
                         value = vm.config.lbrTimeout,
                         supportingText = "Manual range: 0–65535 ms. Default 2000.",
+                        errorText = vm.configFieldErrors["lbr_timeout"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("lbr_timeout", it) }
@@ -1131,6 +1143,7 @@ private fun SettingsScreen(
                         label = "Save type",
                         value = vm.config.saveType,
                         supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
+                        errorText = vm.configFieldErrors["savetype"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("savetype", it) }
@@ -1310,6 +1323,7 @@ private fun ConfigField(
     keyboardType: KeyboardType = KeyboardType.Text,
     isPassword: Boolean = false,
     supportingText: String? = null,
+    errorText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
@@ -1317,7 +1331,12 @@ private fun ConfigField(
         onValueChange = onValueChange,
         modifier = modifier,
         label = { Text(label) },
-        supportingText = supportingText?.let { { Text(it) } },
+        supportingText = when {
+            errorText != null -> ({ Text(errorText) })
+            supportingText != null -> ({ Text(supportingText) })
+            else -> null
+        },
+        isError = errorText != null,
         singleLine = true,
         visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
         keyboardOptions = KeyboardOptions(
@@ -1328,15 +1347,20 @@ private fun ConfigField(
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = MaterialTheme.colorScheme.primary,
             unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+            errorBorderColor = MaterialTheme.colorScheme.error,
             focusedTextColor = MaterialTheme.colorScheme.onSurface,
             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+            errorTextColor = MaterialTheme.colorScheme.error,
             focusedLabelColor = MaterialTheme.colorScheme.primary,
             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            errorLabelColor = MaterialTheme.colorScheme.error,
             cursorColor = MaterialTheme.colorScheme.primary,
             focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            errorContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
             focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+            unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            errorSupportingTextColor = MaterialTheme.colorScheme.error
         )
     )
 }
@@ -1350,6 +1374,7 @@ private fun DropdownConfigField(
     options: List<Pair<String, String>>, // display, actual
     modifier: Modifier = Modifier,
     supportingText: String? = null,
+    errorText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -1364,7 +1389,12 @@ private fun DropdownConfigField(
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
-            supportingText = supportingText?.let { { Text(it) } },
+            supportingText = when {
+                errorText != null -> ({ Text(errorText) })
+                supportingText != null -> ({ Text(supportingText) })
+                else -> null
+            },
+            isError = errorText != null,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .menuAnchor()
@@ -1373,15 +1403,20 @@ private fun DropdownConfigField(
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
+                errorBorderColor = MaterialTheme.colorScheme.error,
                 focusedTextColor = MaterialTheme.colorScheme.onSurface,
                 unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
+                errorTextColor = MaterialTheme.colorScheme.error,
                 focusedLabelColor = MaterialTheme.colorScheme.primary,
                 unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                errorLabelColor = MaterialTheme.colorScheme.error,
                 cursorColor = MaterialTheme.colorScheme.primary,
                 focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                errorContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
                 focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                errorSupportingTextColor = MaterialTheme.colorScheme.error
             )
         )
         ExposedDropdownMenu(

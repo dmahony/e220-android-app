@@ -27,6 +27,7 @@ object E220Protocol {
     fun buildConfigGetRequest(): String = request("/api/config", "GET")
 
     fun buildConfigRequest(config: E220Config): String {
+        requireValidConfig(config)
         val configJson = buildConfigJson(config)
         val envelope = buildJsonObject {
             put("path", "/api/config")

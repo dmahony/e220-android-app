@@ -60,8 +60,7 @@ class BleUartManager(context: Context) {
     private var pendingDescWrite: CompletableDeferred<Unit>? = null
     private var pendingRead: CompletableDeferred<ByteArray>? = null
 
-    private val ackWaiters = HashMap<UByte, CompletableDeferred<Unit>>()
-    private var nextSeq: UByte = 1u
+    private val reliableState = BleReliableState()
 
     private val _connected = MutableStateFlow(false)
     val connected: StateFlow<Boolean> = _connected.asStateFlow()
@@ -182,10 +181,9 @@ class BleUartManager(context: Context) {
     }
 
     private suspend fun sendReliable(frame: BleFrame) = withContext(Dispatchers.IO) {
+        ensureConnected()
         ioMutex.withLock {
-            ensureConnected()
-            val waiter = CompletableDeferred<Unit>()
-            ackWaiters[frame.seq] = waiter
+            val waiter = reliableState.registerWaiter(frame.seq)
             try {
                 var attempt = 0
                 while (true) {
@@ -196,7 +194,7 @@ class BleUartManager(context: Context) {
                     if (attempt >= MAX_RETRY) throw IOException("ACK timeout type=${frame.type} seq=${frame.seq}")
                 }
             } finally {
-                ackWaiters.remove(frame.seq)
+                reliableState.removeWaiter(frame.seq)
             }
         }
     }
@@ -244,8 +242,7 @@ class BleUartManager(context: Context) {
         pendingDescWrite = null
         pendingRead = null
 
-        ackWaiters.values.forEach { it.cancel() }
-        ackWaiters.clear()
+        reliableState.clear()
 
         rxChar = null
         txChar = null
@@ -302,34 +299,32 @@ class BleUartManager(context: Context) {
                 return
             }
             scope.launch {
-                ioMutex.withLock {
-                    val service: BluetoothGattService = g.getService(SERVICE_UUID)
-                        ?: run {
-                            pendingDiscover?.completeExceptionally(IOException("Service not found"))
-                            return@withLock
-                        }
-                    rxChar = service.getCharacteristic(RX_UUID)
-                    txChar = service.getCharacteristic(TX_UUID)
-                    statusChar = service.getCharacteristic(STATUS_UUID)
-                    configChar = service.getCharacteristic(CONFIG_UUID)
-
-                    if (rxChar == null || txChar == null || statusChar == null || configChar == null) {
-                        pendingDiscover?.completeExceptionally(IOException("Required characteristics missing"))
-                        return@withLock
+                val service: BluetoothGattService = g.getService(SERVICE_UUID)
+                    ?: run {
+                        pendingDiscover?.completeExceptionally(IOException("Service not found"))
+                        return@launch
                     }
+                rxChar = service.getCharacteristic(RX_UUID)
+                txChar = service.getCharacteristic(TX_UUID)
+                statusChar = service.getCharacteristic(STATUS_UUID)
+                configChar = service.getCharacteristic(CONFIG_UUID)
 
-                    val md = CompletableDeferred<Unit>()
-                    pendingMtu = md
-                    if (!g.requestMtu(TARGET_MTU)) md.complete(Unit)
-                    runCatching { withTimeout(WRITE_TIMEOUT_MS) { md.await() } }
-
-                    enableNotify(g, txChar!!)
-                    enableNotify(g, statusChar!!)
-
-                    _connected.value = true
-                    pendingDiscover?.complete(Unit)
-                    pendingDiscover = null
+                if (rxChar == null || txChar == null || statusChar == null || configChar == null) {
+                    pendingDiscover?.completeExceptionally(IOException("Required characteristics missing"))
+                    return@launch
                 }
+
+                val md = CompletableDeferred<Unit>()
+                pendingMtu = md
+                if (!g.requestMtu(TARGET_MTU)) md.complete(Unit)
+                runCatching { withTimeout(WRITE_TIMEOUT_MS) { md.await() } }
+
+                enableNotify(g, txChar!!)
+                enableNotify(g, statusChar!!)
+
+                _connected.value = true
+                pendingDiscover?.complete(Unit)
+                pendingDiscover = null
             }
         }
 
@@ -397,7 +392,7 @@ class BleUartManager(context: Context) {
         val decoded = codec.decodeStream(value)
         for (frame in decoded) {
             if (frame.type == MsgType.ACK) {
-                ackWaiters[frame.seq]?.complete(Unit)
+                reliableState.completeAck(frame.seq)
             } else {
                 scope.launch {
                     if (frame.type != MsgType.STATUS) {
@@ -423,9 +418,6 @@ class BleUartManager(context: Context) {
     }
 
     private fun allocSeq(): UByte {
-        if (nextSeq == 0.toUByte()) nextSeq = 1u
-        val s = nextSeq
-        nextSeq = (nextSeq + 1u).toUByte()
-        return s
+        return reliableState.nextSeq()
     }
 }

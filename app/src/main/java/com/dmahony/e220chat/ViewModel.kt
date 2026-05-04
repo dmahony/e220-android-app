@@ -40,6 +40,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         private set
     var configError by mutableStateOf<String?>(null)
         private set
+    var configFieldErrors by mutableStateOf<Map<String, String>>(emptyMap())
+        private set
 
     var darkTheme by mutableStateOf(repo.darkTheme)
         private set
@@ -475,6 +477,17 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         lastChatSequence = snapshot.sequence
     }
 
+    private fun refreshConfigValidation() {
+        configFieldErrors = validateConfig(config)
+        if (configFieldErrors.isEmpty() && configError in setOf(
+                "Fix the highlighted config fields before saving",
+                "Loaded radio config has invalid values"
+            )
+        ) {
+            configError = null
+        }
+    }
+
     fun refreshConfig() {
         if (!repo.isConnected) {
             configError = null
@@ -486,7 +499,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         configRefreshJob = viewModelScope.launch {
             try {
                 config = repo.getConfig()
-                configError = null
+                refreshConfigValidation()
+                configError = if (configFieldErrors.isEmpty()) null else "Loaded radio config has invalid values"
                 configStatus = "Radio config loaded"
                 syncTransportLogs()
             } catch (e: Exception) {
@@ -534,6 +548,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             "wifi_sta_password" -> config.copy(wifiStaPassword = value)
             else -> config
         }
+        refreshConfigValidation()
     }
 
     fun saveConfig(onError: (String) -> Unit, onSuccess: () -> Unit) {
@@ -543,14 +558,30 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     onError("Connect to BLE first")
                     return@launch
                 }
+                refreshConfigValidation()
+                if (configFieldErrors.isNotEmpty()) {
+                    val msg = "Fix the highlighted config fields before saving"
+                    configStatus = null
+                    configError = msg
+                    onError(msg)
+                    return@launch
+                }
                 configRefreshJob?.cancel()
                 diagnosticsRefreshJob?.cancel()
                 config = repo.saveConfig(config)
+                refreshConfigValidation()
                 configStatus = "Configuration applied"
                 configError = null
                 operationStatus = repo.getOperation()
                 syncTransportLogs()
                 onSuccess()
+            } catch (e: ConfigValidationException) {
+                configFieldErrors = e.fieldErrors
+                val msg = formatConfigValidationSummary(e.fieldErrors)
+                configStatus = null
+                configError = msg
+                syncTransportLogs()
+                onError(msg)
             } catch (e: Exception) {
                 val msg = e.message ?: "Failed to save config"
                 configError = msg
