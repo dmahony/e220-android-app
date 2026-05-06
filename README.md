@@ -1,20 +1,22 @@
 # E220 Android App
 
-A private, off-grid messaging system that works without mobile towers, internet access, cloud services, or central servers.
+A private, off-grid messaging system that works **without mobile towers, internet access, cloud services, or central servers**.
 
 This project connects Android phones to low-power LoRa radios using Bluetooth, allowing people to send messages directly over radio instead of relying on traditional communication networks.
 
 Designed for privacy, independence, experimentation, and emergency communication, the system gives users control over their own network.
 
-Why This Exists
+---
+
+## Why This Exists
 
 Most modern communication platforms depend on large companies and centralized infrastructure:
 
-Mobile phone towers
-Internet providers
-Cloud servers
-Online accounts
-Subscription services
+- Mobile phone towers
+- Internet providers
+- Cloud servers
+- Online accounts
+- Subscription services
 
 If those systems fail, become unavailable, are censored, or simply don’t exist where you are, communication stops.
 
@@ -22,61 +24,73 @@ The E220 Android App takes a different approach.
 
 Messages are sent directly between radios using LoRa technology, creating a decentralized communication network that can operate:
 
-In remote areas
-During internet outages
-Off-grid
-At events and festivals
-In emergency situations
-Without requiring any provider or account
+- In remote areas
+- During internet outages
+- Off-grid
+- At events and festivals
+- In emergency situations
+- Without requiring any provider or account
 
 There is no central server controlling the network.
 
-You own the hardware.
+You own the hardware.  
 You control the communication.
 
-Privacy Focused
+---
+
+## Privacy Focused
 
 The project is designed around the idea that communication should remain private and under the user’s control.
 
 The system does not require:
 
-Phone numbers
-SIM cards
-Internet connectivity
-User accounts
-Cloud synchronization
-External infrastructure
+- Phone numbers
+- SIM cards
+- Internet connectivity
+- User accounts
+- Cloud synchronization
+- External infrastructure
 
 Messages travel directly between devices over radio.
 
-What It Can Do
+---
+
+## What It Can Do
 
 The app allows Android devices to connect to E220 LoRa radio modules and:
 
-Send and receive text messages
-Operate over long distances using LoRa
-Create decentralized radio-based chat networks
-Work in areas with poor or no internet coverage
-Run on portable battery-powered hardware
-Hardware
+- Send and receive text messages
+- Operate over long distances using LoRa
+- Create decentralized radio-based chat networks
+- Work in areas with poor or no internet coverage
+- Run on portable battery-powered hardware
+
+---
+
+## Hardware
 
 The project uses E220 LoRa radio modules connected to ESP32-based hardware.
 
 The Android app communicates with the ESP32 over Bluetooth, while the ESP32 handles radio communication through the E220 module.
 
-Who Is This For?
+---
+
+## Who Is This For?
 
 This project may be useful for:
 
-Off-grid communication enthusiasts
-Makers and hackers
-Emergency preparedness
-Rural and remote communication
-Festivals and events
-Mesh networking experimentation
-Privacy-conscious users
-LoRa and radio hobbyists
-Open Source
+- Off-grid communication enthusiasts
+- Makers and hackers
+- Emergency preparedness
+- Rural and remote communication
+- Festivals and events
+- Mesh networking experimentation
+- Privacy-conscious users
+- LoRa and radio hobbyists
+
+---
+
+## Open Source
 
 This project is open source and intended for experimentation, learning, and community improvement.
 
