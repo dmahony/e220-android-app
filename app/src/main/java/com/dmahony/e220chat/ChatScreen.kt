@@ -172,6 +172,7 @@ internal fun ChatScreen(
             selectedDeviceName = vm.selectedBluetoothName,
             connected = vm.connectionState == ConnectionState.CONNECTED,
             canReconnect = vm.selectedBluetoothAddress.isNotBlank(),
+            lastRssi = vm.diagnostics.lastRssi,
             onOpenBluetooth = onOpenBluetooth,
             onReconnectBluetooth = onReconnectBluetooth
         )
@@ -349,6 +350,7 @@ internal fun CompactConnectionBanner(
     selectedDeviceName: String,
     connected: Boolean,
     canReconnect: Boolean,
+    lastRssi: Int = 0,
     onOpenBluetooth: () -> Unit,
     onReconnectBluetooth: () -> Unit
 ) {
@@ -401,6 +403,38 @@ internal fun CompactConnectionBanner(
                     modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                     style = glowStyle
                 )
+            }
+            if (connected && lastRssi != 0) {
+                val quality = E220ChatViewModel.getStaticRssiQuality(lastRssi)
+                val qualityColor = when (E220ChatViewModel.getStaticRssiQualityColor(lastRssi)) {
+                    "green" -> Color(0xFF2BFF88)
+                    "yellow-green" -> Color(0xFFA8E600)
+                    "yellow" -> Color(0xFFFFCC00)
+                    "red" -> Color(0xFFFF5A5A)
+                    else -> Color(0xFF888888)
+                }
+                Surface(
+                    shape = RoundedCornerShape(999.dp),
+                    color = qualityColor.copy(alpha = 0.15f),
+                    border = BorderStroke(1.dp, qualityColor.copy(alpha = 0.3f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "$lastRssi dBm",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = qualityColor
+                        )
+                        Text(
+                            text = quality,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = qualityColor.copy(alpha = 0.8f)
+                        )
+                    }
+                }
             }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                 Text(
@@ -631,12 +665,22 @@ internal fun MessageBubble(message: ChatMessage) {
                             }
                         }
                     )
-                    if (message.sent) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
                         Text(
-                            text = "✓ Sent",
+                            text = TimestampFormatter.relativeTimestamp(message.timestamp),
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
+                        if (message.sent) {
+                            Text(
+                                text = "✓",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }

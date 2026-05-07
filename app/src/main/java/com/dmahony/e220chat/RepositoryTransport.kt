@@ -60,6 +60,7 @@ internal suspend fun E220Repository.executeExchangeLocked(request: String): Stri
         return line
     }
 
+@SuppressLint("MissingPermission")
 internal suspend fun E220Repository.writeRequestAndAwaitResponseLocked(requestText: String): String {
         val gatt = bluetoothGatt ?: throw IOException("BLE GATT not connected")
         val characteristic = rxCharacteristic ?: throw IOException("BLE write characteristic not ready")
@@ -122,6 +123,7 @@ internal suspend fun E220Repository.runBlockingConnect(address: String) {
         connectWithRetryLocked(device)
     }
 
+@SuppressLint("MissingPermission")
 internal suspend fun E220Repository.connectWithRetryLocked(device: BluetoothDevice): BluetoothDeviceInfo {
         val deviceName = displayBluetoothName(device.name)
         var lastError: Exception? = null
@@ -179,6 +181,7 @@ internal suspend fun E220Repository.connectGattOnceLocked(device: BluetoothDevic
         return BluetoothDeviceInfo(name = deviceName, address = device.address)
     }
 
+@SuppressLint("MissingPermission")
 internal fun E220Repository.closeGattLocked(triggerDisconnect: Boolean = true) {
         synchronized(stateLock) {
             pendingConnect?.cancel()
@@ -224,6 +227,7 @@ internal fun E220Repository.refreshGattCache(): Boolean {
         }
     }
 
+@SuppressLint("MissingPermission")
 internal fun E220Repository.handleUnexpectedDisconnect(gatt: BluetoothGatt, status: Int) {
         synchronized(stateLock) {
             pendingResponse?.completeExceptionally(IOException("BLE disconnected"))

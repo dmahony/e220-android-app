@@ -24,6 +24,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -80,7 +82,11 @@ class MainActivity : ComponentActivity() {
         )[E220ChatViewModel::class.java]
 
         setContent {
-            E220ChatTheme(darkTheme = vm.darkTheme) {
+            E220ChatTheme(
+                darkTheme = vm.darkTheme,
+                themeMode = vm.themeMode,
+                fontScale = vm.fontScale
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
@@ -88,6 +94,38 @@ class MainActivity : ComponentActivity() {
                     E220ChatRoot(vm)
                 }
             }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val vm = ViewModelProvider(
+            this,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+        )[E220ChatViewModel::class.java]
+        vm.setForegroundState(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        val vm = ViewModelProvider(
+            this,
+            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+        )[E220ChatViewModel::class.java]
+        vm.setForegroundState(false)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val openTab = intent.getStringExtra("open_tab")
+        if (openTab != null) {
+            val vm = ViewModelProvider(
+                this,
+                ViewModelProvider.AndroidViewModelFactory.getInstance(application)
+            )[E220ChatViewModel::class.java]
+            try {
+                vm.setTab(AppTab.valueOf(openTab))
+            } catch (_: IllegalArgumentException) { }
         }
     }
 }
@@ -98,6 +136,18 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var showBluetoothDialog by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
+
+    // Wire haptic feedback
+    DisposableEffect(haptic) {
+        vm.onHapticRequest = {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        onDispose {
+            vm.onHapticRequest = null
+        }
+    }
+
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestMultiplePermissions()
     ) { grants ->
@@ -229,23 +279,12 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                     onClearMessages = clearChatMessages,
                     onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
                 )
-                AppTab.RADIO -> SettingsScreen(
+                AppTab.SETTINGS -> SettingsScreen(
                     vm = vm,
                     onRefresh = vm::refreshConfig,
                     onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                     onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                     onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                    modifier = Modifier.weight(1f)
-                )
-                AppTab.DEBUG -> DebugScreen(
-                    vm = vm,
-                    onRefresh = vm::refreshDebugNow,
-                    onClear = vm::clearDebug,
-                    onToggleDebug = vm::updateDebugEnabled,
-                    modifier = Modifier.weight(1f)
-                )
-                AppTab.WIFI -> WifiScreen(
-                    vm = vm,
                     modifier = Modifier.weight(1f)
                 )
             }
@@ -269,4 +308,3 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
         )
     }
 }
-

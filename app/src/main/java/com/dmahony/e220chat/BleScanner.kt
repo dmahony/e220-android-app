@@ -152,6 +152,7 @@ internal class BleScanner(
         discovered
     }
 
+    @SuppressLint("MissingPermission")
     fun stopBleScan() {
         val scanner: BluetoothLeScanner?
         val callback: ScanCallback?

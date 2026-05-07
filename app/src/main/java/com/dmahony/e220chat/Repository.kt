@@ -120,6 +120,30 @@ class E220Repository(context: Context) {
             }.apply()
         }
 
+    var themeMode: ThemeMode
+        get() {
+            val stored = prefs.getString(KEY_THEME_MODE, null)
+            return stored?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
+        }
+        set(value) {
+            prefs.edit().putString(KEY_THEME_MODE, value.name).apply()
+        }
+
+    var fontScale: FontScale
+        get() {
+            val stored = prefs.getString(KEY_FONT_SCALE, null)
+            return stored?.let { runCatching { FontScale.valueOf(it) }.getOrNull() } ?: FontScale.NORMAL
+        }
+        set(value) {
+            prefs.edit().putString(KEY_FONT_SCALE, value.name).apply()
+        }
+
+    var isInForeground: Boolean
+        get() = prefs.getBoolean(KEY_IN_FOREGROUND, true)
+        set(value) {
+            prefs.edit().putBoolean(KEY_IN_FOREGROUND, value).apply()
+        }
+
     val isConnected: Boolean
         get() = if (useBinaryTransport) bleV2.connected.value else (bluetoothGatt != null && rxCharacteristic != null && txCharacteristic != null)
 
@@ -130,6 +154,9 @@ class E220Repository(context: Context) {
         private const val KEY_DARK_THEME = "dark_theme"
         private const val KEY_BT_DEVICE_ADDRESS = "bt_device_address"
         private const val KEY_BT_DEVICE_NAME = "bt_device_name"
+        private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_FONT_SCALE = "font_scale"
+        private const val KEY_IN_FOREGROUND = "in_foreground"
         internal const val MAX_TRANSPORT_LOGS = 200
         // BLE responses are chunked in 20-byte notifications with a small delay between chunks.
         // Chat/debug history can legitimately take longer than 20 seconds on larger payloads.

@@ -38,6 +38,7 @@ internal suspend fun LegacyBleTransport.runBlockingConnect(address: String) {
     connectWithRetryLocked(device)
 }
 
+@SuppressLint("MissingPermission")
 internal suspend fun LegacyBleTransport.connectWithRetryLocked(device: BluetoothDevice): BluetoothDeviceInfo {
     val deviceName = displayBluetoothName(device.name)
     var lastError: Exception? = null
@@ -94,6 +95,7 @@ internal suspend fun LegacyBleTransport.connectGattOnceLocked(device: BluetoothD
     return BluetoothDeviceInfo(name = deviceName, address = device.address)
 }
 
+@SuppressLint("MissingPermission")
 internal fun LegacyBleTransport.handleUnexpectedDisconnect(gatt: BluetoothGatt, status: Int) {
     synchronized(stateLock) {
         pendingResponse?.completeExceptionally(IOException("BLE disconnected"))

@@ -15,9 +15,12 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
+import android.content.Intent
+import android.os.Build
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
+    private val notificationManager by lazy { E220NotificationManager(getApplication()) }
     private var rebootReconnectJob: Job? = null
     private var rebootInProgress = false
     private var chatRefreshJob: Job? = null
@@ -45,6 +48,17 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     var darkTheme by mutableStateOf(repo.darkTheme)
         private set
+
+    var themeMode by mutableStateOf(repo.themeMode)
+        private set
+
+    var fontScale by mutableStateOf(repo.fontScale)
+        private set
+
+    var isInForeground by mutableStateOf(true)
+        private set
+
+    var onHapticRequest: (() -> Unit)? = null
 
     var debugText by mutableStateOf("")
         private set
@@ -122,6 +136,31 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     fun toggleTheme() {
         repo.darkTheme = !repo.darkTheme
         darkTheme = repo.darkTheme
+    }
+
+    fun cycleTheme() {
+        val modes = ThemeMode.values()
+        val nextIndex = (modes.indexOf(themeMode) + 1) % modes.size
+        themeMode = modes[nextIndex]
+        repo.themeMode = themeMode
+    }
+
+    fun selectTheme(mode: ThemeMode) {
+        themeMode = mode
+        repo.themeMode = mode
+    }
+
+    fun updateFontScale(scale: FontScale) {
+        fontScale = scale
+        repo.fontScale = scale
+    }
+
+    fun setForegroundState(foreground: Boolean) {
+        if (foreground && !isInForeground) {
+            notificationManager.cancelAll()
+        }
+        isInForeground = foreground
+        repo.isInForeground = foreground
     }
 
     fun refreshBluetoothDevices(autoConnectSavedDevice: Boolean = false) {
@@ -346,7 +385,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 }
                 if (repo.isConnected) {
                     refreshChatLocked()
-                    if (selectedTab == AppTab.DEBUG && debugEnabled) {
+                    if (selectedTab == AppTab.SETTINGS && debugEnabled) {
                         refreshDebugNow()
                     }
                 }
@@ -497,12 +536,25 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun applyChatSnapshot(snapshot: ChatSnapshot) {
+        val previousCount = chatMessages.size
         if (snapshot.reset || lastChatSequence < 0 || snapshot.sequence < lastChatSequence) {
             chatMessages = snapshot.messages
         } else if (snapshot.sequence > lastChatSequence) {
             chatMessages = chatMessages + snapshot.messages
+            if (!isInForeground && snapshot.messages.isNotEmpty()) {
+                val senderName = selectedBluetoothName.ifBlank { "Radio" }
+                notificationManager.showMessageNotifications(snapshot.messages, senderName)
+            }
         }
         lastChatSequence = snapshot.sequence
+        // Trigger haptic for new incoming messages when app is not in foreground or not viewing chat
+        val newMessageCount = chatMessages.size - previousCount
+        if (newMessageCount > 0) {
+            val hasIncoming = snapshot.messages.any { !it.sent }
+            if (hasIncoming && !isInForeground || hasIncoming && selectedTab != AppTab.CHAT) {
+                onHapticRequest?.invoke()
+            }
+        }
     }
 
     private fun refreshConfigValidation() {
@@ -954,6 +1006,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 if (operationStatus.type == "send" && operationStatus.state == "running") {
                     operationStatus = operationStatus.copy(message = "Bluetooth reconnected, finishing send...")
                 }
+                startForegroundService()
                 refreshAllIfConnected()
             }
             TransportConnectionState.CONNECTING, TransportConnectionState.RECONNECTING -> {
@@ -968,6 +1021,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     rebootInProgress = false
                     connectionState = ConnectionState.DISCONNECTED
                     connectionHint = event.message.ifBlank { "Bluetooth disconnected" }
+                    stopForegroundService()
                     if (operationStatus.type == "send" && operationStatus.state == "running") {
                         operationStatus = operationStatus.copy(state = "error", message = "Send stopped because Bluetooth disconnected")
                     }
@@ -1074,7 +1128,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
         debugPollJob = viewModelScope.launch {
             while (isActive) {
-                if (repo.isConnected && selectedTab == AppTab.DEBUG && debugEnabled) {
+                if (repo.isConnected && selectedTab == AppTab.SETTINGS && debugEnabled) {
                     refreshDebug()
                 }
                 delay(1500)
@@ -1110,6 +1164,27 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun startForegroundService() {
+        val context = getApplication<E220ChatApp>()
+        val intent = Intent(context, E220ForegroundService::class.java).apply {
+            action = E220ForegroundService.ACTION_START
+            putExtra(E220ForegroundService.EXTRA_DEVICE_NAME, selectedBluetoothName.ifBlank { "BLE device" })
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            context.startForegroundService(intent)
+        } else {
+            context.startService(intent)
+        }
+    }
+
+    fun stopForegroundService() {
+        val context = getApplication<E220ChatApp>()
+        val intent = Intent(context, E220ForegroundService::class.java).apply {
+            action = E220ForegroundService.ACTION_STOP
+        }
+        context.startService(intent)
+    }
+
     private fun clearConnectionErrors() {
         chatError = null
         configError = null
@@ -1122,6 +1197,28 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         rebootReconnectJob?.cancel()
         repo.dispose()
         super.onCleared()
+    }
+
+    companion object {
+        fun getStaticRssiQuality(rssi: Int): String {
+            return when {
+                rssi >= -55 -> "Excellent"
+                rssi >= -70 -> "Good"
+                rssi >= -85 -> "Fair"
+                rssi >= -100 -> "Weak"
+                else -> "None"
+            }
+        }
+
+        fun getStaticRssiQualityColor(rssi: Int): String {
+            return when {
+                rssi >= -55 -> "green"
+                rssi >= -70 -> "yellow-green"
+                rssi >= -85 -> "yellow"
+                rssi >= -100 -> "red"
+                else -> "gray"
+            }
+        }
     }
 }
 

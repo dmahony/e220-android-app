@@ -10,6 +10,30 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.dmahony.e220chat.FontScale
+import com.dmahony.e220chat.ThemeMode
+
+private val AmoledColors = darkColorScheme(
+    primary = Color(0xFF78D6C7),
+    onPrimary = Color(0xFF07251F),
+    secondary = Color(0xFF9DB7B2),
+    onSecondary = Color(0xFF14211F),
+    tertiary = Color(0xFF85A7FF),
+    onTertiary = Color(0xFF101A3E),
+    background = Color(0xFF000000),
+    onBackground = Color(0xFFE8F0EE),
+    surface = Color(0xFF0A0A0A),
+    onSurface = Color(0xFFE8F0EE),
+    surfaceVariant = Color(0xFF141414),
+    onSurfaceVariant = Color(0xFF9FB0AC),
+    surfaceContainerLow = Color(0xFF0D0D0D),
+    surfaceContainer = Color(0xFF111111),
+    surfaceContainerHigh = Color(0xFF161616),
+    outline = Color(0xFF242424),
+    outlineVariant = Color(0xFF1A1A1A),
+    error = Color(0xFFFF8A8A),
+    onError = Color(0xFF3A1111)
+)
 
 private val DarkColors = darkColorScheme(
     primary = Color(0xFF78D6C7),
@@ -55,7 +79,7 @@ private val LightColors = lightColorScheme(
     onError = Color(0xFFFFFFFF)
 )
 
-private val AppTypography = Typography(
+private fun baseTypography(): Typography = Typography(
     headlineSmall = TextStyle(
         fontSize = 23.sp,
         lineHeight = 28.sp,
@@ -98,12 +122,64 @@ private val AppTypography = Typography(
     )
 )
 
+private fun scaledTypography(multiplier: Float): Typography {
+    val base = baseTypography()
+    return Typography(
+        headlineSmall = base.headlineSmall.copy(
+            fontSize = (23 * multiplier).sp,
+            lineHeight = (28 * multiplier).sp
+        ),
+        titleLarge = base.titleLarge.copy(
+            fontSize = (18 * multiplier).sp,
+            lineHeight = (22 * multiplier).sp
+        ),
+        titleMedium = base.titleMedium.copy(
+            fontSize = (16 * multiplier).sp,
+            lineHeight = (20 * multiplier).sp
+        ),
+        bodyLarge = base.bodyLarge.copy(
+            fontSize = (16 * multiplier).sp,
+            lineHeight = (22 * multiplier).sp
+        ),
+        bodyMedium = base.bodyMedium.copy(
+            fontSize = (15 * multiplier).sp,
+            lineHeight = (21 * multiplier).sp
+        ),
+        bodySmall = base.bodySmall.copy(
+            fontSize = (13 * multiplier).sp,
+            lineHeight = (18 * multiplier).sp
+        ),
+        labelLarge = base.labelLarge.copy(
+            fontSize = (14 * multiplier).sp,
+            lineHeight = (18 * multiplier).sp
+        ),
+        labelMedium = base.labelMedium.copy(
+            fontSize = (12 * multiplier).sp,
+            lineHeight = (16 * multiplier).sp
+        )
+    )
+}
+
 @Composable
-fun E220ChatTheme(darkTheme: Boolean, content: @Composable () -> Unit) {
-    val colors: ColorScheme = if (darkTheme) DarkColors else LightColors
+fun E220ChatTheme(
+    darkTheme: Boolean = true,
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    fontScale: FontScale = FontScale.NORMAL,
+    content: @Composable () -> Unit
+) {
+    val useDarkTheme = when (themeMode) {
+        ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.AMOLED -> true
+    }
+    val colors: ColorScheme = when (themeMode) {
+        ThemeMode.AMOLED -> AmoledColors
+        else -> if (useDarkTheme) DarkColors else LightColors
+    }
     MaterialTheme(
         colorScheme = colors,
-        typography = AppTypography,
+        typography = scaledTypography(fontScale.multiplier),
         content = content
     )
 }

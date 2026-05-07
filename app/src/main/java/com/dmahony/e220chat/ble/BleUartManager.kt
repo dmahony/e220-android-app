@@ -182,6 +182,7 @@ class BleUartManager(context: Context) {
         sendReliable(BleFrame(MsgType.CONFIG, seq, payload, requireAck = true))
     }
 
+    @SuppressLint("MissingPermission")
     suspend fun readConfigCharacteristic(): BleConfig = withContext(Dispatchers.IO) {
         attMutex.withLock {
             val g = gatt ?: throw IOException("Not connected")
@@ -209,6 +210,7 @@ class BleUartManager(context: Context) {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private suspend fun writeFrame(frame: BleFrame) {
         attMutex.withLock {
             val g = gatt ?: throw IOException("Not connected")
@@ -291,6 +293,7 @@ class BleUartManager(context: Context) {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {

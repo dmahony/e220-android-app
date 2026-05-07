@@ -6,9 +6,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 enum class AppTab(val label: String) {
     CHAT("Chat"),
-    RADIO("Radio"),
-    WIFI("WiFi"),
-    DEBUG("Debug")
+    SETTINGS("Settings")
 }
 
 enum class ThemeMode(val label: String) {

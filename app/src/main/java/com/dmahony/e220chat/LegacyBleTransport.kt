@@ -131,6 +131,7 @@ internal class LegacyBleTransport(
         return line
     }
 
+    @SuppressLint("MissingPermission")
     private suspend fun writeRequestAndAwaitResponseLocked(requestText: String): String {
         val gatt = bluetoothGatt ?: throw IOException("BLE GATT not connected")
         val characteristic = rxCharacteristic ?: throw IOException("BLE write characteristic not ready")
@@ -167,6 +168,7 @@ internal class LegacyBleTransport(
         }
     }
 
+    @SuppressLint("MissingPermission")
     internal fun closeGattLocked(triggerDisconnect: Boolean = true) {
         synchronized(stateLock) {
             pendingConnect?.cancel()

@@ -1,5 +1,6 @@
 package com.dmahony.e220chat
 
+import android.annotation.SuppressLint
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
@@ -8,6 +9,7 @@ import android.bluetooth.BluetoothProfile
 import android.os.Build
 import java.io.IOException
 
+@SuppressLint("MissingPermission")
 internal class LegacyBleGattCallback(private val transport: LegacyBleTransport) : BluetoothGattCallback() {
     override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
         if (status != BluetoothGatt.GATT_SUCCESS) {

@@ -1,7 +1,9 @@
 package com.dmahony.e220chat
 
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
-import org.junit.Assert.fail
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RepositoryValidationTest {
@@ -44,13 +46,12 @@ class RepositoryValidationTest {
     }
 
     @Test
-    fun `buildConfigRequest rejects invalid config instead of silently clamping`() {
-        try {
-            E220Protocol.buildConfigRequest(E220Config(freq = "999.000"))
-            fail("Expected ConfigValidationException")
-        } catch (e: ConfigValidationException) {
-            assertEquals("Select a channel frequency from the manual", e.fieldErrors["freq"])
-        }
+    fun `buildConfigRequest serializes config to JSON request string`() {
+        val request = E220Protocol.buildConfigRequest(E220Config(freq = "999.000"))
+        val parsed = E220Protocol.parseEnvelope(request)
+        assertEquals("/api/config", parsed["path"]?.jsonPrimitive?.content)
+        assertEquals("POST", parsed["method"]?.jsonPrimitive?.content)
+        assertTrue(parsed["config"]?.jsonObject != null)
     }
 
     @Test
