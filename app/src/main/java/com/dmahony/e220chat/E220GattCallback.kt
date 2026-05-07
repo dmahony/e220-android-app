@@ -48,9 +48,16 @@ internal class E220GattCallback(private val repo: E220Repository) : BluetoothGat
             repo.pendingConnect?.completeExceptionally(IOException("BLE service discovery failed ($status)"))
             return
         }
+        // Workaround for LineageOS 18.1 Bluetooth stack bug where getService(UUID)
+        // returns null even when the service is advertised. Iterate all services.
         val service = gatt.getService(E220Repository.NUS_SERVICE_UUID)
+            ?: gatt.services?.firstOrNull { svc ->
+                svc.uuid.toString().replace("-", "").uppercase()
+                    .contains("9F6D0001")
+            }
             ?: run {
-                repo.pendingConnect?.completeExceptionally(IOException("BLE UART service not found"))
+                val allUuids = gatt.services?.map { it.uuid }?.joinToString(", ") ?: "none"
+                repo.pendingConnect?.completeExceptionally(IOException("BLE UART service not found (available: $allUuids)"))
                 return
             }
         repo.rxCharacteristic = service.getCharacteristic(E220Repository.NUS_RX_UUID)

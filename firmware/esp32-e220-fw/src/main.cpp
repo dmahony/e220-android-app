@@ -85,7 +85,7 @@ struct Config {
   char wifiStaSsid[32] = "";
   char wifiStaPassword[32] = "";
   // BLE security
-  uint8_t bleSecurity = 1; // 0=none, 1=bonding+encryption
+  uint8_t bleSecurity = 0; // 0=none, 1=bonding+encryption
   char bleSecret[16] = "e220-secret";
 };
 
@@ -767,10 +767,10 @@ void setupBle() {
   gServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *svc = gServer->createService(SERVICE_UUID);
-  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_NR);
+  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   gTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
   gStatusChar = svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
+  gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
 
   gRxChar->setCallbacks(new RxCallbacks());
   gConfigChar->setCallbacks(new ConfigCallbacks());
