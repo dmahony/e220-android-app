@@ -37,6 +37,9 @@ app/build/
 *.p12
 google-services.json
 
+# PlatformIO
+.pio/
+
 # Environment
 .env
 .venv/
