@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.dmahony.e220chat.WifiProtocolTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-04-26T07:03:02.918Z" hostname="7070" time="0.013">
+  <properties/>
+  <testcase name="wifi status request targets the status endpoint" classname="com.dmahony.e220chat.WifiProtocolTest" time="0.002"/>
+  <testcase name="wifi toggle request posts enabled state under body field" classname="com.dmahony.e220chat.WifiProtocolTest" time="0.002"/>
+  <testcase name="wifi scan result parser captures esp32 error details" classname="com.dmahony.e220chat.WifiProtocolTest" time="0.004"/>
+  <testcase name="wifi status parser accepts boolean and numeric enabled fields" classname="com.dmahony.e220chat.WifiProtocolTest" time="0.003"/>
+  <testcase name="wifi scan result parser reads scanned networks from operation payload" classname="com.dmahony.e220chat.WifiProtocolTest" time="0.002"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
