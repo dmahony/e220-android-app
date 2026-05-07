@@ -69,7 +69,9 @@ data class BleConfig(
     val wifiApSsid: String = "",
     val wifiApPassword: String = "",
     val wifiStaSsid: String = "",
-    val wifiStaPassword: String = ""
+    val wifiStaPassword: String = "",
+    val bleSecurity: Int = 1,
+    val bleSecret: String = "e220-secret"
 ) {
     fun toPayload(): ByteArray {
         val out = ByteArrayOutputStream()
@@ -123,6 +125,8 @@ data class BleConfig(
         writeString(wifiApPassword, 31)
         writeString(wifiStaSsid, 31)
         writeString(wifiStaPassword, 31)
+        writeByte(bleSecurity)
+        writeString(bleSecret, 15)
         return out.toByteArray()
     }
 
@@ -217,6 +221,8 @@ data class BleConfig(
             val wifiApPassword = readString(31)
             val wifiStaSsid = readString(31)
             val wifiStaPassword = readString(31)
+            val bleSecurity = if (i < bytes.size) readU8() else 1
+            val bleSecret = if (i < bytes.size) readString(15) else "e220-secret"
 
             return BleConfig(
                 ackTimeoutMs = ackTimeoutMs,
@@ -248,7 +254,9 @@ data class BleConfig(
                 wifiApSsid = wifiApSsid,
                 wifiApPassword = wifiApPassword,
                 wifiStaSsid = wifiStaSsid,
-                wifiStaPassword = wifiStaPassword
+                wifiStaPassword = wifiStaPassword,
+                bleSecurity = bleSecurity,
+                bleSecret = bleSecret
             )
         }
     }
@@ -267,7 +275,8 @@ data class StatusTelemetry(
     val fwMajor: Int,
     val fwMinor: Int,
     val fwPatch: Int,
-    val deviceId24: Int
+    val deviceId24: Int,
+    val bleEncrypted: Boolean = false
 ) {
     companion object {
         fun fromPayload(payload: ByteArray): StatusTelemetry {
@@ -288,7 +297,8 @@ data class StatusTelemetry(
             val id1 = buf.get().toInt() and 0xFF
             val id2 = buf.get().toInt() and 0xFF
             val id = (id0 shl 16) or (id1 shl 8) or id2
-            return StatusTelemetry(fs, batt, rssi, qBleRx, qRadioTx, qRadioRx, qBleTx, uptime, fwMaj, fwMin, fwPat, id)
+            val encrypted = if (payload.size >= 19) (buf.get().toInt() and 0xFF) != 0 else false
+            return StatusTelemetry(fs, batt, rssi, qBleRx, qRadioTx, qRadioRx, qBleTx, uptime, fwMaj, fwMin, fwPat, id, encrypted)
         }
     }
 }

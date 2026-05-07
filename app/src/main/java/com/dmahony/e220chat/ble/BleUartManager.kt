@@ -16,6 +16,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -74,6 +75,7 @@ class BleUartManager(context: Context) {
     val status: StateFlow<StatusTelemetry?> = _status.asStateFlow()
 
     companion object {
+        private const val TAG = "E220BleUart"
         val SERVICE_UUID: UUID = UUID.fromString("9f6d0001-6f52-4d94-b43f-2ef6f3ed7a10")
         val RX_UUID: UUID = UUID.fromString("9f6d0002-6f52-4d94-b43f-2ef6f3ed7a10")
         val TX_UUID: UUID = UUID.fromString("9f6d0003-6f52-4d94-b43f-2ef6f3ed7a10")
@@ -152,6 +154,7 @@ class BleUartManager(context: Context) {
         payload[2] = (userId24 and 0xFF).toByte()
         textBytes.copyInto(payload, destinationOffset = 3)
         val seq = allocSeq()
+        Log.d(TAG, "sendText seq=$seq userId=${userId24.toString(16).padStart(6, '0')} len=${textBytes.size} connected=${_connected.value} rxReady=${rxChar != null}")
         sendReliable(BleFrame(MsgType.TEXT, seq, payload, requireAck = true))
         return seq
     }
@@ -213,6 +216,7 @@ class BleUartManager(context: Context) {
             val raw = codec.encode(frame)
             val mtu = (g.device?.let { currentMtu } ?: TARGET_MTU).coerceAtLeast(23)
             val maxChunk = (mtu - 3).coerceAtLeast(20)
+            Log.d(TAG, "writeFrame type=${frame.type} seq=${frame.seq} bytes=${raw.size} mtu=$mtu chunks=${(raw.size + maxChunk - 1) / maxChunk}")
             var offset = 0
             while (offset < raw.size) {
                 val end = minOf(offset + maxChunk, raw.size)
@@ -225,6 +229,7 @@ class BleUartManager(context: Context) {
                 withTimeout(WRITE_TIMEOUT_MS) { wd.await() }
                 offset = end
             }
+            Log.d(TAG, "writeFrame complete type=${frame.type} seq=${frame.seq}")
         }
     }
 
@@ -347,8 +352,13 @@ class BleUartManager(context: Context) {
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             val p = pendingWrite ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS) p.complete(Unit)
-            else p.completeExceptionally(IOException("Characteristic write failed=$status"))
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "onCharacteristicWrite ok uuid=${characteristic.uuid}")
+                p.complete(Unit)
+            } else {
+                Log.w(TAG, "onCharacteristicWrite failed status=$status uuid=${characteristic.uuid}")
+                p.completeExceptionally(IOException("Characteristic write failed=$status"))
+            }
             pendingWrite = null
         }
 
@@ -402,6 +412,7 @@ class BleUartManager(context: Context) {
 
         val decoded = codec.decodeStream(value)
         for (frame in decoded) {
+            Log.d(TAG, "rxFrame type=${frame.type} seq=${frame.seq} len=${frame.payload.size}")
             if (frame.type == MsgType.ACK) {
                 reliableState.completeAck(frame.seq)
             } else {
