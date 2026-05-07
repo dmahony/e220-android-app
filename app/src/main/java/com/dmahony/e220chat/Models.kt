@@ -11,6 +11,33 @@ enum class AppTab(val label: String) {
     DEBUG("Debug")
 }
 
+enum class ThemeMode(val label: String) {
+    SYSTEM("System default"),
+    LIGHT("Light"),
+    DARK("Dark"),
+    AMOLED("AMOLED black")
+}
+
+enum class FontScale(val label: String, val multiplier: Float) {
+    SMALL("Small", 0.85f),
+    NORMAL("Normal", 1.0f),
+    LARGE("Large", 1.15f),
+    LARGER("Larger", 1.3f);
+
+    companion object {
+        fun fromMultiplier(multiplier: Float): FontScale =
+            entries.minByOrNull { kotlin.math.abs(it.multiplier - multiplier) } ?: NORMAL
+    }
+}
+
+@Serializable
+enum class DeliveryStatus {
+    SENDING,
+    SENT,
+    CONFIRMED,
+    FAILED
+}
+
 @Serializable
 enum class SlashCommand(val label: String, val description: String) {
     GPS("/gps", "Get phone GPS location and post to chat"),
@@ -28,7 +55,11 @@ data class BluetoothDeviceInfo(
 data class ChatMessage(
     val text: String,
     val sent: Boolean,
-    val delivered: Boolean = false
+    val delivered: Boolean = false,
+    val timestamp: Long = System.currentTimeMillis(),
+    val senderName: String = "",
+    val messageId: String = java.util.UUID.randomUUID().toString(),
+    val deliveryStatus: DeliveryStatus = if (sent) DeliveryStatus.SENT else DeliveryStatus.CONFIRMED
 )
 
 @Serializable

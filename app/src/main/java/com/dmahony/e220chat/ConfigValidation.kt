@@ -38,6 +38,7 @@ internal fun validateConfig(config: E220Config): Map<String, String> {
 
     validateSsid(errors, "wifi_ap_ssid", config.wifiApSsid, "AP SSID")
     validateSsid(errors, "wifi_sta_ssid", config.wifiStaSsid, "STA SSID")
+    validateWifiNetworkRequirements(errors, config)
     validatePassword(errors, config)
 
     return errors
@@ -142,5 +143,20 @@ private fun validatePassword(errors: MutableMap<String, String>, config: E220Con
 
     if (config.wifiStaPassword.length > 63) {
         errors["wifi_sta_password"] = "STA password must be 63 characters or fewer"
+    }
+}
+
+private fun validateWifiNetworkRequirements(errors: MutableMap<String, String>, config: E220Config) {
+    val enabled = config.wifiEnabled.trim() == "1"
+    val mode = config.wifiMode.trim()
+
+    if (!enabled) return
+
+    if ((mode == "AP" || mode == "AP_STA") && config.wifiApSsid.trim().isBlank()) {
+        errors["wifi_ap_ssid"] = "AP SSID is required when WiFi AP mode is enabled"
+    }
+
+    if ((mode == "STA" || mode == "AP_STA") && config.wifiStaSsid.trim().isBlank()) {
+        errors["wifi_sta_ssid"] = "STA SSID is required when WiFi STA mode is enabled"
     }
 }

@@ -1094,6 +1094,24 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         debugPollJob?.cancel()
         rebootReconnectJob?.cancel()
     }
+
+    companion object {
+        fun getStaticRssiQuality(rssi: Int): String = when {
+            rssi >= -55 -> "Excellent"
+            rssi >= -70 -> "Good"
+            rssi >= -85 -> "Fair"
+            rssi >= -100 -> "Weak"
+            else -> "None"
+        }
+
+        fun getStaticRssiQualityColor(rssi: Int): String = when {
+            rssi >= -55 -> "green"
+            rssi >= -70 -> "yellow-green"
+            rssi >= -85 -> "yellow"
+            rssi >= -100 -> "red"
+            else -> "gray"
+        }
+    }
 }
 
 enum class ConnectionState {
