@@ -1,0 +1,52 @@
+# E220 Android — Firmware PlatformIO build
+#
+# Builds the ESP32-E220 firmware on push/PR to main branches.
+
+name: Firmware CI
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - firmware/esp32-e220-fw/**
+      - .github/workflows/firmware-ci.yml
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - firmware/esp32-e220-fw/**
+      - .github/workflows/firmware-ci.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: PlatformIO build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install PlatformIO
+        run: |
+          pip install platformio
+          pio --version
+
+      - name: Build firmware
+        working-directory: firmware/esp32-e220-fw
+        run: pio run -e esp32dev
+
+      - name: Upload firmware binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32-e220
+          path: firmware/esp32-e220-fw/.pio/build/esp32dev/firmware.bin
+          retention-days: 7
