@@ -36,14 +36,14 @@ internal suspend fun E220Repository.scanWifi(): WifiScanResult = withContext(kot
     throw ApiException("Timed out waiting for WiFi scan result")
 }
 
-internal suspend fun E220Repository.connectWifi(ssid: String, password: String) {
+internal suspend fun E220Repository.connectWifi(ssid: String, password: String): WifiStatus {
     if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
-    exchange(E220Protocol.buildWifiConnectRequest(ssid, password))
+    return E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiConnectRequest(ssid, password)))
 }
 
-internal suspend fun E220Repository.disconnectWifi() {
+internal suspend fun E220Repository.disconnectWifi(): WifiStatus {
     if (useBinaryTransport) throw ApiException("WiFi controls aren't supported by this firmware")
-    exchange(E220Protocol.buildWifiDisconnectRequest())
+    return E220Protocol.parseWifiStatus(exchange(E220Protocol.buildWifiDisconnectRequest()))
 }
 
 internal suspend fun E220Repository.setWifiAp(password: String) {

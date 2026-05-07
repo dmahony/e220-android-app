@@ -117,8 +117,25 @@ internal fun ChatScreen(
             trimmedDraft.isEmpty() -> {
                 Toast.makeText(context, "Type a message first", Toast.LENGTH_SHORT).show()
             }
-            else -> {
+            connected -> {
                 sendDraftNow(trimmedDraft)
+            }
+            canReconnect -> {
+                val address = vm.selectedBluetoothAddress
+                val name = vm.selectedBluetoothName.ifBlank { address }
+                if (address.isBlank()) {
+                    onOpenBluetooth()
+                } else {
+                    Toast.makeText(context, "Reconnecting to BLE, then sending the draft", Toast.LENGTH_SHORT).show()
+                    vm.connectBluetooth(
+                        device = BluetoothDeviceInfo(name = name, address = address),
+                        onError = onError,
+                        onSuccess = { sendDraftNow(trimmedDraft) }
+                    )
+                }
+            }
+            else -> {
+                onOpenBluetooth()
             }
         }
     }
