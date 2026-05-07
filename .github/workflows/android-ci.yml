@@ -1,0 +1,180 @@
+# E220 Android — CI workflow
+#
+# Runs unit tests, Android lint, debug APK build, generated-file hygiene
+# check, and dependency review on push/PR to main branches.
+#
+# Dependabot is configured separately in .github/dependabot.yml.
+# Secret scanning should be enabled at the GitHub repo/org level under
+# Settings > Code security & analysis > Secret scanning.
+#
+# Dependency review is enabled via the GitHub Dependency Review action below
+# (requires a GitHub Advanced Security license on private repos; free on public).
+
+name: Android CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true
+  APP_VERSION_CODE: ${{ github.run_number }}
+  APP_VERSION_NAME: ci-${{ github.sha }}
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: app/build/reports/tests/
+          retention-days: 7
+
+  lint:
+    name: Android lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run lint
+        run: ./gradlew lint --no-daemon --stacktrace
+
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*.html
+          retention-days: 14
+
+  build-debug:
+    name: Debug APK build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Assemble debug APK
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+  hygiene:
+    name: Generated-file hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle caching
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Check no tracked generated files before build
+        run: |
+          # Fail if .gradle/, app/build/, .pio/, or local.properties
+          # are tracked in git (they should all be gitignored).
+          violations=$(git ls-files \
+            '.gradle/' \
+            'app/build/' \
+            '*/build/' \
+            'local.properties' \
+            '.pio/' \
+          )
+          if [ -n "$violations" ]; then
+            echo "ERROR: tracked generated files found:"
+            echo "$violations"
+            exit 1
+          fi
+          echo "Hygiene check passed: no tracked generated files."
+
+      - name: Run unit tests (ensure build does not dirty tracked state)
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Verify no new tracked files after build
+        run: |
+          untracked=$(git status --porcelain | grep '^[?]' || true)
+          if [ -n "$untracked" ]; then
+            echo "WARNING: untracked files appeared after build (may need .gitignore update):"
+            echo "$untracked"
+          fi
+          dirty=$(git status --porcelain | grep '^[MARC]' || true)
+          if [ -n "$dirty" ]; then
+            echo "ERROR: tracked files modified by build:"
+            echo "$dirty"
+            exit 1
+          fi
+          echo "Post-build hygiene check passed: no tracked files were dirtied."
+
+  dependency-review:
+    name: Dependency review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: always
