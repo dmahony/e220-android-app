@@ -1,101 +1,71 @@
 package com.dmahony.e220chat
 
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonObjectBuilder
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
+import org.json.JSONArray
+import org.json.JSONObject
 
 object E220Protocol {
-    fun buildChatRequest(sinceSequence: Int = 0): String = request("/api/chat", "GET") {
-        if (sinceSequence > 0) put("since", sinceSequence)
-    }
+    fun buildChatRequest(): JSONObject = JSONObject()
+        .put("path", "/api/chat")
+        .put("method", "GET")
 
-    fun buildClearChatRequest(): String = request("/api/chat/clear", "POST")
+    fun buildSendRequest(message: String): JSONObject = JSONObject()
+        .put("path", "/api/send")
+        .put("method", "POST")
+        .put("message", message)
+        .put("body", JSONObject().put("message", message))
 
-    fun buildSendRequest(message: String): String = request("/api/send", "POST") {
-        put("message", message)
-        putJsonObject("body") { put("message", message) }
-    }
+    fun buildConfigGetRequest(): JSONObject = JSONObject()
+        .put("path", "/api/config")
+        .put("method", "GET")
 
-    fun buildConfigGetRequest(): String = request("/api/config", "GET")
+    fun buildConfigRequest(config: E220Config): JSONObject = JSONObject()
+        .put("path", "/api/config")
+        .put("method", "POST")
+        .put("config", config.toJson())
 
-    fun buildConfigRequest(config: E220Config): String {
-        requireValidConfig(config)
-        val configJson = buildConfigJson(config)
-        val envelope = buildJsonObject {
-            put("path", "/api/config")
-            put("method", "POST")
-            // Current BLE firmware consumes top-level "config". Some deployed builds consume POST payloads from "body".
-            // Send both shapes so save works across firmware revisions.
-            put("config", configJson)
-            putJsonObject("body") {
-                put("config", configJson)
-                for ((key, value) in configJson) put(key, value)
-            }
-        }
-        return E220Json.encodeToString(envelope)
-    }
+    fun buildOperationRequest(): JSONObject = JSONObject()
+        .put("path", "/api/operation")
+        .put("method", "GET")
 
-    fun buildOperationRequest(): String = request("/api/operation", "GET")
+    fun buildDiagnosticsRequest(): JSONObject = JSONObject()
+        .put("path", "/api/diagnostics")
+        .put("method", "GET")
 
-    fun buildDiagnosticsRequest(): String = request("/api/diagnostics", "GET")
+    fun buildDebugRequest(): JSONObject = JSONObject()
+        .put("path", "/api/debug")
+        .put("method", "GET")
 
-    fun buildDebugRequest(): String = request("/api/debug", "GET")
+    fun buildDebugClearRequest(): JSONObject = JSONObject()
+        .put("path", "/api/debug/clear")
+        .put("method", "POST")
 
-    fun buildDebugClearRequest(): String = request("/api/debug/clear", "POST")
+    fun buildRebootRequest(): JSONObject = JSONObject()
+        .put("path", "/api/reboot")
+        .put("method", "POST")
 
-    fun buildRebootRequest(): String = request("/api/reboot", "POST")
+    fun parseEnvelope(line: String): JSONObject = JSONObject(line)
 
-    fun buildWifiGetRequest(): String = request("/api/wifi/status", "GET")
-
-    fun buildWifiToggleRequest(enabled: Boolean): String = request("/api/wifi/toggle", "POST") {
-        putJsonObject("body") { put("enabled", enabled) }
-    }
-
-    fun buildWifiScanRequest(): String = request("/api/wifi/scan", "GET")
-
-    fun buildWifiConnectRequest(ssid: String, password: String): String = request("/api/wifi/connect", "POST") {
-        putJsonObject("body") {
-            put("ssid", ssid)
-            put("password", password)
-        }
-    }
-
-    fun buildWifiDisconnectRequest(): String = request("/api/wifi/disconnect", "POST")
-
-    fun buildWifiApRequest(password: String): String = request("/api/wifi/ap", "POST") {
-        putJsonObject("body") { put("password", password) }
-    }
-
-    fun parseChatResponse(response: String): ChatSnapshot {
+    fun parseChatResponse(response: JSONObject): ChatSnapshot {
         val data = requireData(response)
         val sequence = data.optInt("sequence", 0)
-        val reset = data.optBooleanFlexible("reset")
-        val messages = data["messages"]?.jsonArray ?: JsonArray(emptyList())
+        val messages = data.optJSONArray("messages") ?: JSONArray()
         val parsed = buildList {
-            for (element in messages) {
-                val raw = element.jsonPrimitive.contentOrNull ?: continue
+            for (i in 0 until messages.length()) {
+                val raw = messages.optString(i, "")
                 if (raw.isBlank()) continue
                 val sent = raw.startsWith("[TX]")
                 val cleaned = raw.replace(Regex("^\\[(TX|RX)\\]\\s*"), "").trim()
                 add(ChatMessage(text = cleaned.ifBlank { raw }, sent = sent, delivered = sent))
             }
         }
-        return ChatSnapshot(sequence = sequence, messages = parsed, reset = reset)
+        return ChatSnapshot(sequence = sequence, messages = parsed)
     }
 
-    fun parseConfigResponse(response: String): E220Config {
-        val data = requireConfigData(response)
+    fun parseConfigResponse(response: JSONObject): E220Config {
+        val data = requireData(response)
         return E220Config(
             freq = data.optDouble("freq", 868.125).toString(),
-            txpower = data.optInt("txpower", 21).toString(),
+            txpower = data.optInt("txpower", 22).toString(),
             baud = data.optInt("baud", 9600).toString(),
             addr = data.optString("addr", "0x0000"),
             dest = data.optString("dest", "0xFFFF"),
@@ -112,17 +82,11 @@ object E220Protocol {
             worCycle = data.optInt("wor_cycle", 3).toString(),
             cryptH = data.optInt("crypt_h", 0).toString(),
             cryptL = data.optInt("crypt_l", 0).toString(),
-            saveType = data.optInt("savetype", 1).toString(),
-            wifiEnabled = data.optInt("wifi_enabled", 0).toString(),
-            wifiMode = data.optString("wifi_mode", "AP"),
-            wifiApSsid = data.optString("wifi_ap_ssid", ""),
-            wifiApPassword = data.optString("wifi_ap_password", ""),
-            wifiStaSsid = data.optString("wifi_sta_ssid", ""),
-            wifiStaPassword = data.optString("wifi_sta_password", "")
+            saveType = data.optInt("savetype", 1).toString()
         )
     }
 
-    fun parseDiagnosticsResponse(response: String): Diagnostics {
+    fun parseDiagnosticsResponse(response: JSONObject): Diagnostics {
         val data = requireData(response)
         return Diagnostics(
             e220Timeouts = data.optInt("e220_timeout_count", 0),
@@ -132,7 +96,7 @@ object E220Protocol {
             freeHeap = data.optLong("free_heap", 0L),
             minFreeHeap = data.optLong("min_free_heap", 0L),
             btName = data.optString("bt_name", ""),
-            btHasClient = data.optBooleanFlexible("bt_has_client"),
+            btHasClient = data.optBoolean("bt_has_client", false),
             btRequestCount = data.optInt("bt_request_count", 0),
             btParseErrors = data.optInt("bt_parse_errors", 0),
             btRawMessageCount = data.optInt("bt_raw_message_count", 0),
@@ -140,193 +104,55 @@ object E220Protocol {
         )
     }
 
-    fun parseOperationResponse(response: String): OperationStatus {
+    fun parseOperationResponse(response: JSONObject): OperationStatus {
         val data = requireData(response)
         return OperationStatus(
             type = data.optString("type", "none"),
             state = data.optString("state", "idle"),
             message = data.optString("message", ""),
             updatedAtMs = data.optLong("updated_at_ms", 0L),
-            rawResult = when (val result = data["result"]) {
-                null, kotlinx.serialization.json.JsonNull -> data.optString("result_raw", "{}")
-                else -> result.toString()
-            }
+            rawResult = data.optJSONObject("result")?.toString() ?: data.optString("result_raw", "{}")
         )
     }
 
-    fun parseDebugLog(response: String): String = requireData(response)
+    fun parseDebugLog(response: JSONObject): String = requireData(response)
         .optString("log", "")
         .replace("\\n", "\n")
 
-    fun parseSendAcknowledgement(response: String): String {
-        val envelope = parseEnvelope(response)
-        if (!envelope.optBooleanFlexible("ok", false)) {
-            throw ApiException(envelope.optString("error", "Send failed"))
+    fun parseSendAcknowledgement(response: JSONObject): String {
+        if (!response.optBoolean("ok", false)) {
+            throw ApiException(response.optString("error", "Send failed"))
         }
-        val data = envelope["data"]?.jsonObject ?: JsonObject(emptyMap())
-        return data.optString("message", envelope.optString("message", ""))
+        return response.optJSONObject("data")?.optString("message", "")
+            ?.ifBlank { response.optString("message", "") }
+            ?: ""
     }
 
-    fun parseWifiStatus(response: String): WifiStatus {
-        val data = requireData(response)
-        return WifiStatus(
-            enabled = data.optBooleanFlexible("enabled"),
-            mode = data.optString("mode", "AP"),
-            apSsid = data.optString("ap_ssid", ""),
-            apPassword = data.optString("ap_password", ""),
-            staSsid = data.optString("sta_ssid", ""),
-            staPassword = data.optString("sta_password", ""),
-            staConnected = data.optBooleanFlexible("sta_connected"),
-            staIp = data.optString("sta_ip", ""),
-            apIp = data.optString("ap_ip", "")
-        )
+    private fun requireData(response: JSONObject): JSONObject {
+        if (!response.optBoolean("ok", false)) {
+            throw ApiException(response.optString("error", "Request failed"))
+        }
+        return response.optJSONObject("data") ?: JSONObject()
     }
 
-    fun parseWifiScanResult(operation: OperationStatus): WifiScanResult {
-        if (operation.type != "wifi_scan") {
-            throw ApiException("Unexpected operation type: ${operation.type}")
-        }
-
-        val raw = operation.rawResult.trim()
-        val resultObject = if (raw.isBlank()) {
-            null
-        } else {
-            try {
-                E220Json.parseToJsonElement(raw).jsonObject
-            } catch (_: Exception) {
-                null
-            }
-        }
-
-        val scanObject = resultObject?.get("scan")?.jsonObject
-        val networksJson = resultObject?.get("networks")?.jsonArray ?: JsonArray(emptyList())
-        val networks = buildList {
-            for (element in networksJson) {
-                val net = element.jsonObject
-                val encryption = net.optString("encryption", "").trim()
-                val encrypted = when {
-                    net.containsKey("encrypted") -> net.optBooleanFlexible("encrypted")
-                    encryption.isNotBlank() -> !encryption.equals("open", ignoreCase = true)
-                    else -> false
-                }
-                add(
-                    WifiNetwork(
-                        ssid = net.optString("ssid", "Unknown"),
-                        rssi = net.optInt("rssi", 0),
-                        encrypted = encrypted,
-                        channel = net.optInt("channel", 0)
-                    )
-                )
-            }
-        }
-
-        val status = scanObject?.optString("status", operation.state)
-            ?: operation.state.ifBlank { "idle" }
-        val requestedAtMs = scanObject?.optLong("requested_at_ms", operation.updatedAtMs) ?: operation.updatedAtMs
-        val completedAtMs = scanObject?.optLong("completed_at_ms", operation.updatedAtMs) ?: operation.updatedAtMs
-        val durationMs = scanObject?.optLong("duration_ms", (completedAtMs - requestedAtMs).coerceAtLeast(0L))
-            ?: (completedAtMs - requestedAtMs).coerceAtLeast(0L)
-        val networkCount = scanObject?.optInt("network_count", networks.size) ?: networks.size
-        val errorCode = if (scanObject?.containsKey("error_code") == true) scanObject.optInt("error_code") else null
-        val error = scanObject?.optString("error", operation.message).orEmpty().ifBlank { operation.message }
-
-        return WifiScanResult(
-            scan = WifiScanInfo(
-                status = status,
-                requestedAtMs = requestedAtMs,
-                completedAtMs = completedAtMs,
-                durationMs = durationMs,
-                networkCount = networkCount,
-                errorCode = errorCode,
-                error = error
-            ),
-            networks = networks
-        )
-    }
-
-    fun parseWifiScanNetworks(operation: OperationStatus): List<WifiNetwork> =
-        parseWifiScanResult(operation).networks
-
-    private fun buildConfigJson(config: E220Config): JsonObject = buildJsonObject {
-        put("freq", config.freq.toDoubleOrNull() ?: 868.125)
-        put("txpower", config.txpower.toIntOrNull() ?: 21)
-        put("baud", config.baud.toIntOrNull() ?: 9600)
-        put("addr", config.addr)
-        put("dest", config.dest)
-        put("airrate", config.airrate.toIntOrNull() ?: 2)
-        put("subpkt", config.subpkt.toIntOrNull() ?: 0)
-        put("parity", config.parity.toIntOrNull() ?: 0)
-        put("txmode", config.txmode.toIntOrNull() ?: 0)
-        put("rssi_noise", config.rssiNoise.toIntOrNull() ?: 0)
-        put("rssi_byte", config.rssiByte.toIntOrNull() ?: 0)
-        put("lbt", config.lbt.toIntOrNull() ?: 0)
-        put("lbr_rssi", config.lbrRssi.toIntOrNull() ?: -55)
-        put("lbr_timeout", config.lbrTimeout.toIntOrNull() ?: 2000)
-        put("urxt", config.urxt.toIntOrNull() ?: 3)
-        put("wor_cycle", config.worCycle.toIntOrNull() ?: 3)
-        put("crypt_h", config.cryptH.toIntOrNull() ?: 0)
-        put("crypt_l", config.cryptL.toIntOrNull() ?: 0)
-        put("savetype", config.saveType.toIntOrNull() ?: 1)
-        put("wifi_enabled", config.wifiEnabled.toIntOrNull() ?: 0)
-        put("wifi_mode", config.wifiMode)
-        put("wifi_ap_ssid", config.wifiApSsid)
-        put("wifi_ap_password", config.wifiApPassword)
-        put("wifi_sta_ssid", config.wifiStaSsid)
-        put("wifi_sta_password", config.wifiStaPassword)
-    }
-
-    fun hasConfigPayload(response: String): Boolean = runCatching {
-        val envelope = parseEnvelope(response)
-        val data = envelope["data"]?.jsonObject
-        data?.containsConfigFields() == true ||
-            data?.get("config")?.jsonObject?.containsConfigFields() == true ||
-            envelope["config"]?.jsonObject?.containsConfigFields() == true ||
-            envelope.containsConfigFields()
-    }.getOrDefault(false)
-
-    private fun parseEnvelope(response: String): JsonObject {
-        return try {
-            E220Json.parseToJsonElement(response).jsonObject
-        } catch (e: Exception) {
-            throw ApiException("Invalid response from ESP32: ${e.message ?: response}")
-        }
-    }
-
-    private fun requireData(response: String): JsonObject {
-        val envelope = parseEnvelope(response)
-        if (!envelope.optBooleanFlexible("ok", false)) {
-            throw ApiException(envelope.optString("error", "Request failed"))
-        }
-        return envelope["data"]?.jsonObject ?: JsonObject(emptyMap())
-    }
-
-    private fun requireConfigData(response: String): JsonObject {
-        val envelope = parseEnvelope(response)
-        val ok = envelope.optBooleanFlexible("ok", false) || envelope.optString("status", "").equals("ok", ignoreCase = true)
-        if (!ok && envelope.containsKey("error")) {
-            throw ApiException(envelope.optString("error", "Config request failed"))
-        }
-        val data = envelope["data"]?.jsonObject
-        return when {
-            data?.get("config") is JsonObject -> data["config"]!!.jsonObject
-            data?.containsConfigFields() == true -> data
-            envelope["config"] is JsonObject -> envelope["config"]!!.jsonObject
-            envelope.containsConfigFields() -> envelope
-            ok -> throw ApiException("Config response did not include E220 configuration")
-            else -> throw ApiException(envelope.optString("error", "Config request failed"))
-        }
-    }
-
-    private fun JsonObject.containsConfigFields(): Boolean =
-        containsKey("freq") || containsKey("txpower") || containsKey("baud") ||
-            containsKey("addr") || containsKey("airrate") || containsKey("wor_cycle")
-
-    private fun request(path: String, method: String, extra: JsonObjectBuilder.() -> Unit = {}): String {
-        val envelope = buildJsonObject {
-            put("path", path)
-            put("method", method)
-            extra()
-        }
-        return E220Json.encodeToString(envelope)
-    }
+    private fun E220Config.toJson(): JSONObject = JSONObject()
+        .put("freq", freq.toDoubleOrNull() ?: 868.125)
+        .put("txpower", txpower.toIntOrNull() ?: 22)
+        .put("baud", baud.toIntOrNull() ?: 9600)
+        .put("addr", addr)
+        .put("dest", dest)
+        .put("airrate", airrate.toIntOrNull() ?: 2)
+        .put("subpkt", subpkt.toIntOrNull() ?: 0)
+        .put("parity", parity.toIntOrNull() ?: 0)
+        .put("txmode", txmode.toIntOrNull() ?: 0)
+        .put("rssi_noise", rssiNoise.toIntOrNull() ?: 0)
+        .put("rssi_byte", rssiByte.toIntOrNull() ?: 0)
+        .put("lbt", lbt.toIntOrNull() ?: 0)
+        .put("lbr_rssi", lbrRssi.toIntOrNull() ?: -55)
+        .put("lbr_timeout", lbrTimeout.toIntOrNull() ?: 2000)
+        .put("urxt", urxt.toIntOrNull() ?: 3)
+        .put("wor_cycle", worCycle.toIntOrNull() ?: 3)
+        .put("crypt_h", cryptH.toIntOrNull() ?: 0)
+        .put("crypt_l", cryptL.toIntOrNull() ?: 0)
+        .put("savetype", saveType.toIntOrNull() ?: 1)
 }

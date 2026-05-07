@@ -26,6 +26,7 @@ internal class BleScanner(
     context: Context,
     private val bluetoothAdapter: BluetoothAdapter?,
     private val tag: String,
+    private val isDebuggableApp: Boolean,
     private val selectedDeviceAddressProvider: () -> String?,
     private val displayBluetoothName: (String?) -> String,
 ) {
@@ -82,16 +83,22 @@ internal class BleScanner(
             val hasExpectedName = isExpectedName(advertisedName)
             val hasExpectedService = result.scanRecord?.serviceUuids?.any { it.uuid == NUS_SERVICE_UUID } == true
             val isSelectedDevice = device.address == selectedDeviceAddressProvider()
-            Log.d(
-                tag,
-                "BLE scan found: addr=${redactBluetoothAddress(device.address)} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
-            )
+            if (isDebuggableApp) {
+                Log.d(
+                    tag,
+                    "BLE scan found: addr=${redactBluetoothAddress(device.address)} name=$advertisedName expectedName=$hasExpectedName expectedService=$hasExpectedService"
+                )
+            }
             if (hasExpectedName || hasExpectedService || isSelectedDevice) {
                 putDevice(expectedResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added expected device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${expectedResults.size}")
+                if (isDebuggableApp) {
+                    Log.d(tag, "BLE scan added expected device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${expectedResults.size}")
+                }
             } else {
                 putDevice(fallbackResults, device.address, advertisedName)
-                Log.d(tag, "BLE scan added fallback device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${fallbackResults.size}")
+                if (isDebuggableApp) {
+                    Log.d(tag, "BLE scan added fallback device: ${redactBluetoothAddress(device.address)} (${displayBluetoothName(advertisedName)}) total=${fallbackResults.size}")
+                }
             }
         }
 

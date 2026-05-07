@@ -1,27 +1,19 @@
 package com.dmahony.e220chat
 
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.doubleOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class E220ProtocolTest {
-    private val json = Json { ignoreUnknownKeys = true }
-
     @Test
     fun `build send request nests message under body field`() {
         val request = E220Protocol.buildSendRequest("hello radio")
-        val envelope = json.parseToJsonElement(request).jsonObject
 
-        assertEquals("/api/send", envelope["path"]?.jsonPrimitive?.content)
-        assertEquals("POST", envelope["method"]?.jsonPrimitive?.content)
-        assertEquals("hello radio", envelope["body"]?.jsonObject?.get("message")?.jsonPrimitive?.content)
+        assertEquals("/api/send", request.getString("path"))
+        assertEquals("POST", request.getString("method"))
+        val body = request.getJSONObject("body")
+        assertEquals("hello radio", body.getString("message"))
     }
 
     @Test
@@ -46,55 +38,35 @@ class E220ProtocolTest {
                 saveType = "1"
             )
         )
-        val envelope = json.parseToJsonElement(request).jsonObject
-        val config = envelope["config"]!!.jsonObject
-        val bodyConfig = envelope["body"]!!.jsonObject["config"]!!.jsonObject
 
-        assertEquals(915.125, requireNotNull(config["freq"]?.jsonPrimitive?.doubleOrNull), 0.0)
-        assertEquals(30, config["txpower"]?.jsonPrimitive?.intOrNull)
-        assertEquals("0x0001", config["addr"]?.jsonPrimitive?.content)
-        assertEquals(1, config["txmode"]?.jsonPrimitive?.intOrNull)
-        assertEquals(34, config["crypt_l"]?.jsonPrimitive?.intOrNull)
-        assertEquals(915.125, requireNotNull(bodyConfig["freq"]?.jsonPrimitive?.doubleOrNull), 0.0)
-    }
-
-    @Test
-    fun `build clear chat request posts to chat clear endpoint`() {
-        val request = E220Protocol.buildClearChatRequest()
-        val envelope = json.parseToJsonElement(request).jsonObject
-
-        assertEquals("/api/chat/clear", envelope["path"]?.jsonPrimitive?.content)
-        assertEquals("POST", envelope["method"]?.jsonPrimitive?.content)
-    }
-
-    @Test
-    fun `build chat request includes since sequence when requested`() {
-        val request = E220Protocol.buildChatRequest(42)
-        val envelope = json.parseToJsonElement(request).jsonObject
-
-        assertEquals("/api/chat", envelope["path"]?.jsonPrimitive?.content)
-        assertEquals("GET", envelope["method"]?.jsonPrimitive?.content)
-        assertEquals(42, envelope["since"]?.jsonPrimitive?.intOrNull)
+        assertEquals("/api/config", request.getString("path"))
+        assertEquals("POST", request.getString("method"))
+        val config = request.getJSONObject("config")
+        assertEquals(915.125, config.getDouble("freq"), 0.0)
+        assertEquals(30, config.getInt("txpower"))
+        assertEquals("0x0001", config.getString("addr"))
+        assertEquals(1, config.getInt("txmode"))
+        assertEquals(34, config.getInt("crypt_l"))
     }
 
     @Test
     fun `parse chat response reads nested data messages and marks sent ones delivered`() {
-        val response = """
+        val response = JSONObject(
+            """
             {
               "ok": true,
               "path": "/api/chat",
               "data": {
                 "sequence": 7,
-                "reset": true,
                 "messages": ["[RX] hello", "[TX] hi back"]
               }
             }
-        """.trimIndent()
+            """.trimIndent()
+        )
 
         val chat = E220Protocol.parseChatResponse(response)
 
         assertEquals(7, chat.sequence)
-        assertTrue(chat.reset)
         assertEquals(2, chat.messages.size)
         assertEquals("hello", chat.messages[0].text)
         assertTrue(!chat.messages[0].sent)
@@ -106,7 +78,8 @@ class E220ProtocolTest {
 
     @Test
     fun `parse diagnostics response reads nested firmware fields`() {
-        val response = """
+        val response = JSONObject(
+            """
             {
               "ok": true,
               "path": "/api/diagnostics",
@@ -125,7 +98,8 @@ class E220ProtocolTest {
                 "last_rssi": -72
               }
             }
-        """.trimIndent()
+            """.trimIndent()
+        )
 
         val diagnostics = E220Protocol.parseDiagnosticsResponse(response)
 
@@ -141,7 +115,8 @@ class E220ProtocolTest {
 
     @Test
     fun `parse debug response returns nested log text`() {
-        val response = """
+        val response = JSONObject(
+            """
             {
               "ok": true,
               "path": "/api/debug",
@@ -149,55 +124,9 @@ class E220ProtocolTest {
                 "log": "[TX] hello\\n[RX] hi"
               }
             }
-        """.trimIndent()
+            """.trimIndent()
+        )
 
         assertEquals("[TX] hello\n[RX] hi", E220Protocol.parseDebugLog(response))
-    }
-
-    @Test
-    fun `parse config response accepts nested data config object`() {
-        val response = """
-            {
-              "ok": true,
-              "data": {
-                "config": {
-                  "freq": 930.125,
-                  "txpower": 30,
-                  "baud": 9600,
-                  "addr": "0x0001",
-                  "dest": "0xFFFF",
-                  "airrate": 2,
-                  "wor_cycle": 3
-                }
-              }
-            }
-        """.trimIndent()
-
-        val config = E220Protocol.parseConfigResponse(response)
-
-        assertEquals("930.125", config.freq)
-        assertEquals("30", config.txpower)
-        assertEquals("0x0001", config.addr)
-    }
-
-    @Test
-    fun `parse config response accepts flat web config object`() {
-        val response = """
-            {
-              "config": {
-                "freq": 915.125,
-                "txpower": 27,
-                "baud": 19200,
-                "addr": "0x0002"
-              }
-            }
-        """.trimIndent()
-
-        val config = E220Protocol.parseConfigResponse(response)
-
-        assertEquals("915.125", config.freq)
-        assertEquals("27", config.txpower)
-        assertEquals("19200", config.baud)
-        assertEquals("0x0002", config.addr)
     }
 }

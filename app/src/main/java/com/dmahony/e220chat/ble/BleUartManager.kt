@@ -16,6 +16,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
+import android.util.Log
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -44,6 +46,7 @@ class BleUartManager(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val codec = BleFrameCodec()
     private val ioMutex = Mutex()
+    private val attMutex = Mutex()
 
     private var gatt: BluetoothGatt? = null
     private var rxChar: BluetoothGattCharacteristic? = null
@@ -72,6 +75,7 @@ class BleUartManager(context: Context) {
     val status: StateFlow<StatusTelemetry?> = _status.asStateFlow()
 
     companion object {
+        private const val TAG = "E220BleUart"
         val SERVICE_UUID: UUID = UUID.fromString("9f6d0001-6f52-4d94-b43f-2ef6f3ed7a10")
         val RX_UUID: UUID = UUID.fromString("9f6d0002-6f52-4d94-b43f-2ef6f3ed7a10")
         val TX_UUID: UUID = UUID.fromString("9f6d0003-6f52-4d94-b43f-2ef6f3ed7a10")
@@ -133,6 +137,15 @@ class BleUartManager(context: Context) {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    fun dispose() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        connectedAddress = null
+        closeGatt()
+        scope.cancel()
+    }
+
     suspend fun sendText(userId24: Int, text: String): UByte {
         val textBytes = text.toByteArray(Charsets.UTF_8)
         val payload = ByteArray(3 + textBytes.size)
@@ -141,6 +154,7 @@ class BleUartManager(context: Context) {
         payload[2] = (userId24 and 0xFF).toByte()
         textBytes.copyInto(payload, destinationOffset = 3)
         val seq = allocSeq()
+        Log.d(TAG, "sendText seq=$seq userId=${userId24.toString(16).padStart(6, '0')} len=${textBytes.size} connected=${_connected.value} rxReady=${rxChar != null}")
         sendReliable(BleFrame(MsgType.TEXT, seq, payload, requireAck = true))
         return seq
     }
@@ -169,7 +183,7 @@ class BleUartManager(context: Context) {
     }
 
     suspend fun readConfigCharacteristic(): BleConfig = withContext(Dispatchers.IO) {
-        ioMutex.withLock {
+        attMutex.withLock {
             val g = gatt ?: throw IOException("Not connected")
             val c = configChar ?: throw IOException("CONFIG characteristic unavailable")
             val rd = CompletableDeferred<ByteArray>()
@@ -182,40 +196,40 @@ class BleUartManager(context: Context) {
 
     private suspend fun sendReliable(frame: BleFrame) = withContext(Dispatchers.IO) {
         ensureConnected()
-        ioMutex.withLock {
-            val waiter = reliableState.registerWaiter(frame.seq)
-            try {
-                var attempt = 0
-                while (true) {
-                    attempt++
-                    writeFrame(frame)
-                    val ok = runCatching { withTimeout(ACK_TIMEOUT_MS) { waiter.await() } }.isSuccess
-                    if (ok) return@withLock
-                    if (attempt >= MAX_RETRY) throw IOException("ACK timeout type=${frame.type} seq=${frame.seq}")
-                }
-            } finally {
-                reliableState.removeWaiter(frame.seq)
-            }
+        runAckRetry(
+            initialSeq = frame.seq,
+            maxRetry = MAX_RETRY,
+            timeoutMs = ACK_TIMEOUT_MS,
+            nextSeq = ::allocSeq,
+            registerWaiter = reliableState::registerWaiter,
+            removeWaiter = reliableState::removeWaiter
+        ) { attempt, seq ->
+            val attemptFrame = if (attempt == 1) frame else frame.copy(seq = seq)
+            writeFrame(attemptFrame)
         }
     }
 
     private suspend fun writeFrame(frame: BleFrame) {
-        val g = gatt ?: throw IOException("Not connected")
-        val c = rxChar ?: throw IOException("RX characteristic unavailable")
-        val raw = codec.encode(frame)
-        val mtu = (g.device?.let { currentMtu } ?: TARGET_MTU).coerceAtLeast(23)
-        val maxChunk = (mtu - 3).coerceAtLeast(20)
-        var offset = 0
-        while (offset < raw.size) {
-            val end = minOf(offset + maxChunk, raw.size)
-            val chunk = raw.copyOfRange(offset, end)
-            val wd = CompletableDeferred<Unit>()
-            pendingWrite = wd
-            c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
-            c.value = chunk
-            if (!g.writeCharacteristic(c)) throw IOException("writeCharacteristic failed")
-            withTimeout(WRITE_TIMEOUT_MS) { wd.await() }
-            offset = end
+        attMutex.withLock {
+            val g = gatt ?: throw IOException("Not connected")
+            val c = rxChar ?: throw IOException("RX characteristic unavailable")
+            val raw = codec.encode(frame)
+            val mtu = (g.device?.let { currentMtu } ?: TARGET_MTU).coerceAtLeast(23)
+            val maxChunk = (mtu - 3).coerceAtLeast(20)
+            Log.d(TAG, "writeFrame type=${frame.type} seq=${frame.seq} bytes=${raw.size} mtu=$mtu chunks=${(raw.size + maxChunk - 1) / maxChunk}")
+            var offset = 0
+            while (offset < raw.size) {
+                val end = minOf(offset + maxChunk, raw.size)
+                val chunk = raw.copyOfRange(offset, end)
+                val wd = CompletableDeferred<Unit>()
+                pendingWrite = wd
+                c.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                c.value = chunk
+                if (!g.writeCharacteristic(c)) throw IOException("writeCharacteristic failed")
+                withTimeout(WRITE_TIMEOUT_MS) { wd.await() }
+                offset = end
+            }
+            Log.d(TAG, "writeFrame complete type=${frame.type} seq=${frame.seq}")
         }
     }
 
@@ -257,22 +271,24 @@ class BleUartManager(context: Context) {
 
     @SuppressLint("MissingPermission")
     private suspend fun enableNotify(g: BluetoothGatt, c: BluetoothGattCharacteristic) {
-        if (!g.setCharacteristicNotification(c, true)) throw IOException("setCharacteristicNotification failed")
-        val d = c.getDescriptor(CCC_UUID) ?: throw IOException("CCC descriptor missing")
-        val dd = CompletableDeferred<Unit>()
-        pendingDescWrite = dd
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val res = g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
-            if (res != BluetoothStatusCodes.SUCCESS) {
-                throw IOException("writeDescriptor failed code=$res")
+        attMutex.withLock {
+            if (!g.setCharacteristicNotification(c, true)) throw IOException("setCharacteristicNotification failed")
+            val d = c.getDescriptor(CCC_UUID) ?: throw IOException("CCC descriptor missing")
+            val dd = CompletableDeferred<Unit>()
+            pendingDescWrite = dd
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val res = g.writeDescriptor(d, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)
+                if (res != BluetoothStatusCodes.SUCCESS) {
+                    throw IOException("writeDescriptor failed code=$res")
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+                @Suppress("DEPRECATION")
+                if (!g.writeDescriptor(d)) throw IOException("writeDescriptor failed")
             }
-        } else {
-            @Suppress("DEPRECATION")
-            d.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            @Suppress("DEPRECATION")
-            if (!g.writeDescriptor(d)) throw IOException("writeDescriptor failed")
+            withTimeout(WRITE_TIMEOUT_MS) { dd.await() }
         }
-        withTimeout(WRITE_TIMEOUT_MS) { dd.await() }
     }
 
     private val callback = object : BluetoothGattCallback() {
@@ -336,8 +352,13 @@ class BleUartManager(context: Context) {
 
         override fun onCharacteristicWrite(g: BluetoothGatt, characteristic: BluetoothGattCharacteristic, status: Int) {
             val p = pendingWrite ?: return
-            if (status == BluetoothGatt.GATT_SUCCESS) p.complete(Unit)
-            else p.completeExceptionally(IOException("Characteristic write failed=$status"))
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                Log.d(TAG, "onCharacteristicWrite ok uuid=${characteristic.uuid}")
+                p.complete(Unit)
+            } else {
+                Log.w(TAG, "onCharacteristicWrite failed status=$status uuid=${characteristic.uuid}")
+                p.completeExceptionally(IOException("Characteristic write failed=$status"))
+            }
             pendingWrite = null
         }
 
@@ -391,6 +412,7 @@ class BleUartManager(context: Context) {
 
         val decoded = codec.decodeStream(value)
         for (frame in decoded) {
+            Log.d(TAG, "rxFrame type=${frame.type} seq=${frame.seq} len=${frame.payload.size}")
             if (frame.type == MsgType.ACK) {
                 reliableState.completeAck(frame.seq)
             } else {
@@ -399,7 +421,7 @@ class BleUartManager(context: Context) {
                         // app->esp ACK via reliable channel
                         runCatching {
                             val ack = BleFrame(MsgType.ACK, frame.seq, byteArrayOf(), requireAck = false)
-                            ioMutex.withLock { if (_connected.value) writeFrame(ack) }
+                            if (_connected.value) writeFrame(ack)
                         }
                     }
                     _frames.emit(frame)

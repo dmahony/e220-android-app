@@ -32,7 +32,8 @@ enum MsgType : uint8_t {
   MSG_CONFIG  = 0x04,
   MSG_PROFILE = 0x05,
   MSG_ERROR   = 0x06,
-  MSG_WHOIS   = 0x07
+  MSG_WHOIS   = 0x07,
+  MSG_AUTH    = 0x08
 };
 
 enum FlowState : uint8_t {
@@ -83,6 +84,9 @@ struct Config {
   char wifiApPassword[32] = "";
   char wifiStaSsid[32] = "";
   char wifiStaPassword[32] = "";
+  // BLE security
+  uint8_t bleSecurity = 1; // 0=none, 1=bonding+encryption
+  char bleSecret[16] = "e220-secret";
 };
 
 struct PendingAck {
@@ -105,9 +109,10 @@ struct StatusPayload {
   uint8_t fwMin;
   uint8_t fwPatch;
   uint8_t deviceId[3];
+  uint8_t bleEncrypted;   // 1 if link encrypted
 };
 
-constexpr size_t STATUS_PAYLOAD_LEN = 18;
+constexpr size_t STATUS_PAYLOAD_LEN = 19;
 
 void serializeStatusPayload(const StatusPayload &sp, uint8_t *out) {
   size_t idx = 0;
@@ -129,35 +134,56 @@ void serializeStatusPayload(const StatusPayload &sp, uint8_t *out) {
   out[idx++] = sp.deviceId[0];
   out[idx++] = sp.deviceId[1];
   out[idx++] = sp.deviceId[2];
+  out[idx++] = sp.bleEncrypted;
 }
 
 template<typename T, size_t N>
 class RingQueue {
 public:
   bool push(const T &v) {
-    if (count_ == N) return false;
-    data_[tail_] = v;
-    tail_ = (tail_ + 1) % N;
-    count_++;
-    return true;
+    portENTER_CRITICAL(&mux_);
+    const bool ok = count_ < N;
+    if (ok) {
+      data_[tail_] = v;
+      tail_ = (tail_ + 1) % N;
+      count_++;
+    }
+    portEXIT_CRITICAL(&mux_);
+    return ok;
   }
 
   bool pop(T &out) {
-    if (count_ == 0) return false;
-    out = data_[head_];
-    head_ = (head_ + 1) % N;
-    count_--;
-    return true;
+    portENTER_CRITICAL(&mux_);
+    const bool ok = count_ > 0;
+    if (ok) {
+      out = data_[head_];
+      head_ = (head_ + 1) % N;
+      count_--;
+    }
+    portEXIT_CRITICAL(&mux_);
+    return ok;
   }
 
-  size_t size() const { return count_; }
-  bool empty() const { return count_ == 0; }
+  size_t size() const {
+    portENTER_CRITICAL(&mux_);
+    const size_t n = count_;
+    portEXIT_CRITICAL(&mux_);
+    return n;
+  }
+
+  bool empty() const {
+    portENTER_CRITICAL(&mux_);
+    const bool isEmpty = count_ == 0;
+    portEXIT_CRITICAL(&mux_);
+    return isEmpty;
+  }
 
 private:
   T data_[N]{};
   size_t head_ = 0;
   size_t tail_ = 0;
   size_t count_ = 0;
+  mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
 };
 
 // ========================= Globals =========================
@@ -171,6 +197,10 @@ uint32_t gLastProfileMs = 0;
 uint32_t gLastRadioTxMs = 0;
 uint32_t gLastFlowNotifyMs = 0;
 bool gBleClientConnected = false;
+uint16_t gBleConnHandle = 0;
+uint16_t gBleNotifyPayloadMax = 20;
+bool gBleEncrypted = false;     // link is encrypted
+bool gBleBonded = false;        // device is bonded
 
 RingQueue<Frame, 32> gBleRxQueue;
 RingQueue<Frame, 32> gBleTxQueue;
@@ -178,6 +208,8 @@ RingQueue<Frame, 32> gRadioTxQueue;
 RingQueue<Frame, 32> gRadioRxQueue;
 
 PendingAck gPendingBleTx;
+
+portMUX_TYPE gBleStateMux = portMUX_INITIALIZER_UNLOCKED;
 
 NimBLEServer *gServer = nullptr;
 NimBLECharacteristic *gRxChar = nullptr;
@@ -202,8 +234,11 @@ uint8_t crcXor(const uint8_t *data, size_t len) {
 }
 
 uint8_t allocSeq() {
+  portENTER_CRITICAL(&gBleStateMux);
   if (gNextSeq == 0) gNextSeq = 1;
-  return gNextSeq++;
+  const uint8_t seq = gNextSeq++;
+  portEXIT_CRITICAL(&gBleStateMux);
+  return seq;
 }
 
 size_t encodeFrame(const Frame &f, uint8_t *out, size_t outCap) {
@@ -216,6 +251,32 @@ size_t encodeFrame(const Frame &f, uint8_t *out, size_t outCap) {
   if (f.len > 0) memcpy(out + 4, f.payload, f.len);
   out[4 + f.len] = crcXor(out, 4 + f.len);
   return need;
+}
+
+uint16_t currentBleNotifyPayloadMax() {
+  portENTER_CRITICAL(&gBleStateMux);
+  const uint16_t maxLen = gBleNotifyPayloadMax < 20 ? 20 : gBleNotifyPayloadMax;
+  portEXIT_CRITICAL(&gBleStateMux);
+  return maxLen;
+}
+
+void notifyChunked(NimBLECharacteristic *c, const uint8_t *data, size_t len) {
+  uint16_t connHandle = 0;
+  bool connected = false;
+  portENTER_CRITICAL(&gBleStateMux);
+  connected = gBleClientConnected;
+  connHandle = gBleConnHandle;
+  portEXIT_CRITICAL(&gBleStateMux);
+  if (!c || !connected || connHandle == 0 || data == nullptr || len == 0) return;
+
+  const size_t chunkSize = currentBleNotifyPayloadMax();
+  size_t offset = 0;
+  while (offset < len) {
+    const size_t chunkLen = min(chunkSize, len - offset);
+    c->notify(data + offset, chunkLen);
+    offset += chunkLen;
+    if (offset < len) delay(1);
+  }
 }
 
 bool decodeByte(StreamParser &p, uint8_t b, Frame &outFrame) {
@@ -349,13 +410,32 @@ void buildConfigPayload(uint8_t *payload, size_t &idx) {
   writeString(gCfg.wifiApPassword, 31);
   writeString(gCfg.wifiStaSsid, 31);
   writeString(gCfg.wifiStaPassword, 31);
+  payload[idx++] = gCfg.bleSecurity;
+  writeString(gCfg.bleSecret, 15);
 }
 
 void publishConfigCharacteristic() {
   uint8_t payload[256];
   size_t idx = 0;
   buildConfigPayload(payload, idx);
-  gConfigChar->setValue(payload, idx);
+  if (gConfigChar) {
+    gConfigChar->setValue(payload, idx);
+  }
+}
+
+void emitConfigFrame(uint8_t seqToUse) {
+  uint8_t payload[256];
+  size_t idx = 0;
+  buildConfigPayload(payload, idx);
+  if (gConfigChar) gConfigChar->setValue(payload, idx);
+
+  Frame c{};
+  c.type = MSG_CONFIG;
+  c.seq = seqToUse ? seqToUse : allocSeq();
+  c.len = (uint8_t)idx;
+  if (idx > 0) memcpy(c.payload, payload, idx);
+  c.requireAck = true;
+  gBleTxQueue.push(c);
 }
 
 bool refreshE220RadioConfig(bool logDetails = true) {
@@ -470,6 +550,7 @@ void pushStatusFrame(bool force) {
   sp.fwMin = 0;
   sp.fwPatch = 0;
   memcpy(sp.deviceId, gDeviceId, 3);
+  sp.bleEncrypted = gBleEncrypted ? 1 : 0;
 
   uint8_t payload[STATUS_PAYLOAD_LEN]{};
   serializeStatusPayload(sp, payload);
@@ -484,7 +565,7 @@ void pushStatusFrame(bool force) {
 
   // mirror in STATUS characteristic for read
   gStatusChar->setValue(payload, STATUS_PAYLOAD_LEN);
-  if (gBleClientConnected) gStatusChar->notify();
+  notifyChunked(gStatusChar, payload, STATUS_PAYLOAD_LEN);
 }
 
 void pushProfileFrame() {
@@ -577,22 +658,70 @@ void applyConfigPayload(const uint8_t *p, uint8_t len) {
   readString(gCfg.wifiStaSsid, 32);
   readString(gCfg.wifiStaPassword, 32);
 
+  if (i < len) {
+    gCfg.bleSecurity = p[i++];
+  }
+  // bleSecret as length-prefixed string
+  if (i < len) {
+    uint8_t sLen = p[i++];
+    if (i + sLen <= len) {
+      uint8_t actual = (uint8_t)min((size_t)sLen, (size_t)15);
+      memcpy(gCfg.bleSecret, p + i, actual);
+      gCfg.bleSecret[actual] = '\0';
+      i += sLen;
+    }
+  }
+
   publishConfigCharacteristic();
 }
 
 // ========================= BLE callbacks =========================
 class ServerCallbacks : public NimBLEServerCallbacks {
-  void onConnect(NimBLEServer *pServer) override {
+  void onConnect(NimBLEServer *pServer, ble_gap_conn_desc *desc) override {
+    (void)pServer;
+    portENTER_CRITICAL(&gBleStateMux);
     gBleClientConnected = true;
+    gBleConnHandle = desc ? desc->conn_handle : 0;
+    gBleNotifyPayloadMax = 20;
+    gBleEncrypted = false;
+    portEXIT_CRITICAL(&gBleStateMux);
     updateFlowState(FLOW_READY);
     pushStatusFrame(true);
     pushProfileFrame();
+    Serial.println("[BLE] Client connected — waiting for encryption");
   }
 
-  void onDisconnect(NimBLEServer *pServer) override {
+  void onDisconnect(NimBLEServer *pServer, ble_gap_conn_desc *desc) override {
+    (void)pServer;
+    (void)desc;
+    portENTER_CRITICAL(&gBleStateMux);
     gBleClientConnected = false;
+    gBleConnHandle = 0;
+    gBleNotifyPayloadMax = 20;
+    gBleEncrypted = false;
+    gBleBonded = false;
     gPendingBleTx.active = false;
+    portEXIT_CRITICAL(&gBleStateMux);
     NimBLEDevice::startAdvertising();
+    Serial.println("[BLE] Client disconnected");
+  }
+
+  void onMTUChange(uint16_t MTU, ble_gap_conn_desc *desc) override {
+    (void)desc;
+    portENTER_CRITICAL(&gBleStateMux);
+    gBleNotifyPayloadMax = MTU > 3 ? (MTU - 3) : 20;
+    portEXIT_CRITICAL(&gBleStateMux);
+  }
+
+  void onAuthenticationComplete(ble_gap_conn_desc *desc) override {
+    if (!desc) return;
+    portENTER_CRITICAL(&gBleStateMux);
+    gBleEncrypted = true;
+    gBleBonded = true;
+    portEXIT_CRITICAL(&gBleStateMux);
+    Serial.printf("[BLE] Authentication complete — bonded=%d encrypted=%d\n",
+                  gBleBonded, gBleEncrypted);
+    pushStatusFrame(true);
   }
 };
 
@@ -610,7 +739,9 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
 
 class ConfigCallbacks : public NimBLECharacteristicCallbacks {
   void onRead(NimBLECharacteristic *c) override {
-    refreshE220RadioConfig(false);
+    // Keep reads fast and deterministic. The cached gCfg is refreshed on boot
+    // and immediately after writes, so serving the cached payload avoids a slow
+    // E220 hardware round-trip inside the BLE read callback.
     publishConfigCharacteristic();
   }
 
@@ -636,15 +767,24 @@ void setupBle() {
   gServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *svc = gServer->createService(SERVICE_UUID);
-  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_NR);
   gTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
   gStatusChar = svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
 
   gRxChar->setCallbacks(new RxCallbacks());
   gConfigChar->setCallbacks(new ConfigCallbacks());
 
   svc->start();
+
+  // configure security: bonding + LE Secure Connections
+  // ESP32 has no display/keyboard, so use Just Works pairing (encrypted, no MITM)
+  if (gCfg.bleSecurity >= 1) {
+    NimBLEDevice::setSecurityAuth(true, false, true);
+    Serial.println("[BLE] Security enabled — bonding with LE Secure Connections (Just Works)");
+  }
+
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
 
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
   adv->addServiceUUID(SERVICE_UUID);
@@ -666,44 +806,83 @@ void setupRadio() {
 void sendBleFrame(const Frame &f) {
   uint8_t raw[260];
   const size_t n = encodeFrame(f, raw, sizeof(raw));
-  if (n == 0 || !gBleClientConnected) return;
+  if (n == 0) return;
+  uint16_t connHandle = 0;
+  bool connected = false;
+  bool encrypted = false;
+  portENTER_CRITICAL(&gBleStateMux);
+  connected = gBleClientConnected;
+  connHandle = gBleConnHandle;
+  encrypted = gBleEncrypted;
+  portEXIT_CRITICAL(&gBleStateMux);
+  if (!connected || connHandle == 0) return;
+  if (gCfg.bleSecurity >= 1 && !encrypted) {
+    Serial.println("[BLE] Rejected send — link not encrypted");
+    return;
+  }
 
-  gTxChar->setValue(raw, n);
-  gTxChar->notify();
+  notifyChunked(gTxChar, raw, n);
 
   if (f.requireAck) {
+    portENTER_CRITICAL(&gBleStateMux);
     gPendingBleTx.active = true;
     gPendingBleTx.frame = f;
     gPendingBleTx.lastSendMs = millis();
     gPendingBleTx.retries = 0;
+    portEXIT_CRITICAL(&gBleStateMux);
   }
 }
 
 void processBleTxQueue() {
-  if (gPendingBleTx.active || gBleTxQueue.empty()) return;
+  bool pendingActive = false;
+  portENTER_CRITICAL(&gBleStateMux);
+  pendingActive = gPendingBleTx.active;
+  portEXIT_CRITICAL(&gBleStateMux);
+  if (pendingActive || gBleTxQueue.empty()) return;
   Frame out{};
   if (gBleTxQueue.pop(out)) sendBleFrame(out);
 }
 
 void handlePendingAckTimeout() {
-  if (!gPendingBleTx.active) return;
-  const uint32_t now = millis();
-  if ((now - gPendingBleTx.lastSendMs) < gCfg.ackTimeoutMs) return;
+  Frame pendingFrame{};
+  uint32_t lastSendMs = 0;
+  uint8_t retries = 0;
+  bool active = false;
 
-  if (gPendingBleTx.retries >= gCfg.maxRetries) {
-    gPendingBleTx.active = false;
+  portENTER_CRITICAL(&gBleStateMux);
+  active = gPendingBleTx.active;
+  if (active) {
+    pendingFrame = gPendingBleTx.frame;
+    lastSendMs = gPendingBleTx.lastSendMs;
+    retries = gPendingBleTx.retries;
+  }
+  portEXIT_CRITICAL(&gBleStateMux);
+  if (!active) return;
+
+  const uint32_t now = millis();
+  if ((now - lastSendMs) < gCfg.ackTimeoutMs) return;
+
+  if (retries >= gCfg.maxRetries) {
+    portENTER_CRITICAL(&gBleStateMux);
+    if (gPendingBleTx.active && gPendingBleTx.frame.seq == pendingFrame.seq) {
+      gPendingBleTx.active = false;
+    }
+    portEXIT_CRITICAL(&gBleStateMux);
     updateFlowState(FLOW_TX_FAILED);
     pushStatusFrame(true);
-    enqueueError(0x02, gPendingBleTx.frame.type, "ACK_TIMEOUT");
+    enqueueError(0x02, pendingFrame.type, "ACK_TIMEOUT");
     return;
   }
 
-  gPendingBleTx.retries++;
-  gPendingBleTx.lastSendMs = now;
+  portENTER_CRITICAL(&gBleStateMux);
+  if (gPendingBleTx.active && gPendingBleTx.frame.seq == pendingFrame.seq) {
+    gPendingBleTx.retries = (uint8_t)(retries + 1);
+    gPendingBleTx.lastSendMs = now;
+  }
+  portEXIT_CRITICAL(&gBleStateMux);
   uint8_t raw[260];
-  const size_t n = encodeFrame(gPendingBleTx.frame, raw, sizeof(raw));
-  gTxChar->setValue(raw, n);
-  gTxChar->notify();
+  const size_t n = encodeFrame(pendingFrame, raw, sizeof(raw));
+  notifyChunked(gTxChar, raw, n);
 }
 
 void queueRadioTextFromBle(const Frame &in) {
@@ -735,12 +914,17 @@ void processBleRxQueue() {
     if (in.type != MSG_ACK) enqueueAck(in.seq);
 
     switch (in.type) {
-      case MSG_ACK:
+      case MSG_ACK: {
+        bool matchedAck = false;
+        portENTER_CRITICAL(&gBleStateMux);
         if (gPendingBleTx.active && in.seq == gPendingBleTx.frame.seq) {
           gPendingBleTx.active = false;
-          updateFlowState(FLOW_READY);
+          matchedAck = true;
         }
+        portEXIT_CRITICAL(&gBleStateMux);
+        if (matchedAck) updateFlowState(FLOW_READY);
         break;
+      }
 
       case MSG_TEXT:
         queueRadioTextFromBle(in);
@@ -827,9 +1011,14 @@ void periodicFlowState() {
   if ((now - gLastFlowNotifyMs) < 500) return;
   gLastFlowNotifyMs = now;
 
+  bool pendingActive = false;
+  portENTER_CRITICAL(&gBleStateMux);
+  pendingActive = gPendingBleTx.active;
+  portEXIT_CRITICAL(&gBleStateMux);
+
   if (gBleRxQueue.size() > 24 || gBleTxQueue.size() > 24 || gRadioTxQueue.size() > 24 || gRadioRxQueue.size() > 24) {
     updateFlowState(FLOW_BUSY);
-  } else if (!gPendingBleTx.active && gFlowState == FLOW_BUSY) {
+  } else if (!pendingActive && gFlowState == FLOW_BUSY) {
     updateFlowState(FLOW_READY);
   }
 }

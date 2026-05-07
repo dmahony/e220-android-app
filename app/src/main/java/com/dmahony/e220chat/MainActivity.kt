@@ -1,583 +1,54 @@
 
-@file:OptIn(ExperimentalLayoutApi::class)
-package com.dmahony.e220chat
-
-import android.Manifest
-import android.bluetooth.BluetoothAdapter
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.widget.Toast
-import androidx.activity.ComponentActivity
-import androidx.compose.material3.*
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.animation.core.*
-import androidx.compose.animation.*
-import androidx.core.content.ContextCompat
-import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.draw.clip
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Done
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.style.TextDecoration
-import androidx.lifecycle.ViewModelProvider
-import com.dmahony.e220chat.ui.theme.E220ChatTheme
-import kotlinx.coroutines.launch
-
-class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val vm = ViewModelProvider(
-            this,
-            ViewModelProvider.AndroidViewModelFactory.getInstance(application)
-        )[E220ChatViewModel::class.java]
-
-        setContent {
-            E220ChatTheme(darkTheme = vm.darkTheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    E220ChatRoot(vm)
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-private fun E220ChatRoot(vm: E220ChatViewModel) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var showBluetoothDialog by remember { mutableStateOf(false) }
-    val permissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestMultiplePermissions()
-    ) { grants ->
-        if (grants.isNotEmpty() && grants.values.all { it }) {
-            showBluetoothDialog = true
-            vm.refreshBluetoothDevices()
-        } else {
-            Toast.makeText(context, "Bluetooth permissions are required for BLE scanning", Toast.LENGTH_LONG).show()
-        }
-    }
-    val locationPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            scope.launch {
-                sendGpsMessage(context, vm) { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
-            }
-        } else {
-            Toast.makeText(context, "Location permission is required for /gps", Toast.LENGTH_LONG).show()
-        }
-    }
-    val bluetoothPermissions = remember {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            arrayOf(
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            )
-        } else {
-            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-    }
-    DisposableEffect(context) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
-                when (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)) {
-                    BluetoothAdapter.STATE_ON -> vm.onBluetoothAdapterStateChanged(true)
-                    BluetoothAdapter.STATE_OFF -> vm.onBluetoothAdapterStateChanged(false)
-                }
-            }
-        }
-        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
-        } else {
-            @Suppress("DEPRECATION")
-            context.registerReceiver(receiver, filter)
-        }
-        onDispose {
-            runCatching { context.unregisterReceiver(receiver) }
-        }
-    }
-    val openBluetoothPicker: () -> Unit = {
-        val missing = bluetoothPermissions.any { permission ->
-            ContextCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing) {
-            permissionLauncher.launch(bluetoothPermissions)
-        } else {
-            showBluetoothDialog = true
-            vm.refreshBluetoothDevices()
-        }
-    }
-    val requestGpsLocation: () -> Unit = {
-        val missingLocationPermission =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED
-        if (missingLocationPermission) {
-            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-        } else {
-            scope.launch {
-                sendGpsMessage(context, vm) { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
-            }
-        }
-    }
-    val clearChatMessages: () -> Unit = {
-        vm.clearChatMessages()
-        Toast.makeText(context, "Chat cleared", Toast.LENGTH_SHORT).show()
-    }
-
-    Scaffold(containerColor = Color.Transparent) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
-            ) {
-                TabRow(
-                    selectedTabIndex = vm.selectedTab.ordinal,
-                    modifier = Modifier.height(26.dp),
-                    containerColor = Color.Transparent,
-                    divider = {},
-                    indicator = { tabPositions ->
-                        TabRowDefaults.PrimaryIndicator(
-                            modifier = Modifier.tabIndicatorOffset(tabPositions[vm.selectedTab.ordinal]),
-                            height = 1.5.dp,
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.68f)
-                        )
-                    }
-                ) {
-                    AppTab.values().forEach { tab ->
-                        Tab(
-                            selected = vm.selectedTab == tab,
-                            onClick = { vm.setTab(tab) },
-                            modifier = Modifier.height(26.dp),
-                            text = {
-                                Text(
-                                    tab.label,
-                                    style = MaterialTheme.typography.labelSmall
-                                )
-                            }
-                        )
-                    }
-                }
-            }
-
-            when (vm.selectedTab) {
-                AppTab.CHAT -> ChatScreen(
-                    vm = vm,
-                    modifier = Modifier.weight(1f),
-                    onOpenBluetooth = openBluetoothPicker,
-                    onReconnectBluetooth = { vm.reconnectSavedDevice { Toast.makeText(context, it, Toast.LENGTH_LONG).show() } },
-                    onGpsCommand = requestGpsLocation,
-                    onClearMessages = clearChatMessages,
-                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }
-                )
-                AppTab.RADIO -> SettingsScreen(
-                    vm = vm,
-                    onRefresh = vm::refreshConfig,
-                    onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                    onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                    onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                    modifier = Modifier.weight(1f)
-                )
-                AppTab.DEBUG -> DebugScreen(
-                    vm = vm,
-                    onRefresh = vm::refreshDebugNow,
-                    onClear = vm::clearDebug,
-                    onToggleDebug = vm::updateDebugEnabled,
-                    modifier = Modifier.weight(1f)
-                )
-                AppTab.WIFI -> WifiScreen(
-                    vm = vm,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
-    }
-
-    if (showBluetoothDialog) {
-        BluetoothDeviceDialog(
-            vm = vm,
-            onDismiss = { showBluetoothDialog = false },
-            onRefresh = vm::refreshBluetoothDevices,
-            onConnect = { device ->
-                vm.connectBluetooth(
-                    device = device,
-                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                    onSuccess = { showBluetoothDialog = false }
-                )
-            },
-            onDisconnect = vm::disconnectBluetooth,
-            onPick = vm::selectBluetoothDevice
-        )
-    }
-}
-
-@Composable
-private fun ChatScreen(
-    vm: E220ChatViewModel,
-    modifier: Modifier = Modifier,
-    onOpenBluetooth: () -> Unit,
-    onReconnectBluetooth: () -> Unit,
-    onGpsCommand: () -> Unit,
-    onClearMessages: () -> Unit,
-    onError: (String) -> Unit
-) {
-    val context = LocalContext.current
-    var draft by remember { mutableStateOf("") }
-    var composerFocused by remember { mutableStateOf(false) }
-    val slashCommandQuery = remember(draft) { draft }
-    val slashMenuExpanded = slashCommandQuery.startsWith("/")
-    val slashCommands = remember(slashCommandQuery) {
-        val all = SlashCommand.values().toList()
-        if (!slashCommandQuery.startsWith("/") || slashCommandQuery.length <= 1) {
-            all
-        } else {
-            val filtered = all.filter { command ->
-                command.label.startsWith(slashCommandQuery, ignoreCase = true) ||
-                    command.description.contains(slashCommandQuery.drop(1), ignoreCase = true)
-            }
-            if (filtered.isEmpty()) all else filtered
-        }
-    }
-    val connected = vm.connectionState == ConnectionState.CONNECTED
-    val sendCurrentDraft: () -> Unit = {
-        if (connected) {
-            vm.sendMessage(
-                draft,
-                onError = onError,
-                onSuccess = { draft = "" }
-            )
-        } else {
-            onOpenBluetooth()
-        }
-    }
-    val listState = rememberLazyListState()
-    var composerHeightPx by remember { mutableIntStateOf(0) }
-    val composerBottomPadding = with(LocalDensity.current) {
-        composerHeightPx.toDp() + 12.dp
-    }
-
-    LaunchedEffect(composerFocused, vm.chatMessages.size) {
-        if (vm.chatMessages.isNotEmpty() && (composerFocused || connected)) {
-            listState.animateScrollToItem(vm.chatMessages.lastIndex)
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .imePadding()
-            .padding(horizontal = 2.dp, vertical = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        vm.chatError?.let { ErrorBanner(it) }
-
-        CompactConnectionBanner(
-            connectionHint = vm.connectionHint,
-            selectedDeviceName = vm.selectedBluetoothName,
-            connected = vm.connectionState == ConnectionState.CONNECTED,
-            canReconnect = vm.selectedBluetoothAddress.isNotBlank(),
-            onOpenBluetooth = onOpenBluetooth,
-            onReconnectBluetooth = onReconnectBluetooth
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f, fill = true)
-        ) {
-            if (vm.chatMessages.isEmpty()) {
-                EmptyThreadHint(connected = vm.connectionState == ConnectionState.CONNECTED)
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = composerBottomPadding),
-                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
-                    itemsIndexed(vm.chatMessages) { _, message ->
-                        MessageBubble(message)
-                    }
-                }
-            }
-        }
-
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .onSizeChanged { composerHeightPx = it.height },
-            shape = RoundedCornerShape(16.dp),
-            color = MaterialTheme.colorScheme.surfaceContainerLow,
-            tonalElevation = 0.dp,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp)
-                ) {
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { newValue ->
-                            draft = newValue
-                        },
-                        enabled = connected,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .onFocusChanged { composerFocused = it.isFocused },
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(
-                            onSend = { sendCurrentDraft() },
-                            onDone = { sendCurrentDraft() }
-                        ),
-                        placeholder = {
-                            Text(
-                                text = if (connected) "Message" else "Connect BLE to chat",
-                                style = MaterialTheme.typography.bodySmall,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                        singleLine = true,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.38f),
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f),
-                            disabledBorderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.10f),
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            disabledTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            focusedLabelColor = MaterialTheme.colorScheme.primary,
-                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            cursorColor = MaterialTheme.colorScheme.primary,
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            focusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    )
-                    DropdownMenu(
-                        expanded = slashMenuExpanded,
-                        onDismissRequest = { },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        slashCommands.forEach { command ->
-                            DropdownMenuItem(
-                                text = {
-                                    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                                        Text(command.label)
-                                        Text(
-                                            command.description,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    when (command) {
-                                        SlashCommand.GPS -> onGpsCommand()
-                                        SlashCommand.CLEAR -> onClearMessages()
-                                        SlashCommand.NAME -> {
-                                            val name = draft.removePrefix("/name").trim()
-                                            if (name.isEmpty()) {
-                                                Toast.makeText(context, "Please provide a name: /name Alice", Toast.LENGTH_SHORT).show()
-                                            } else {
-                                                vm.setUsername(name, 
-                                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, 
-                                                    onSuccess = { Toast.makeText(context, "Username set to $name", Toast.LENGTH_SHORT).show() }
-                                                )
-                                            }
-                                        }
-                                    }
-                                    draft = ""
-                                    composerFocused = false
-                                }
-                            )
-                        }
-                    }
-                }
-                FilledTonalButton(
-                    onClick = sendCurrentDraft,
-                    modifier = Modifier.height(52.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.filledTonalButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer,
-                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                    ),
-                    contentPadding = PaddingValues(horizontal = if (connected) 14.dp else 12.dp, vertical = 0.dp)
-                ) {
-                    if (connected) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
-                    } else {
-                        Text("Connect")
-                    }
-                }
-            }
-        }
-    }
-}
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.layout.IntrinsicSize
 
 @Composable
 private fun CompactConnectionBanner(
     connectionHint: String,
     selectedDeviceName: String,
-    connected: Boolean,
-    canReconnect: Boolean,
-    onOpenBluetooth: () -> Unit,
-    onReconnectBluetooth: () -> Unit
+    onOpenBluetooth: () -> Unit
 ) {
-    val transition = rememberInfiniteTransition(label = "linkGlow")
-    val glowPulse by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glowPulse"
-    )
-    val glowColor = if (connected) Color(0xFF2BFF88) else Color(0xFFFF5A5A)
-    val glowText = if (connected) "LINK UP" else "LINK DOWN"
-    val glowStyle = MaterialTheme.typography.labelMedium.copy(
-        color = glowColor,
-        shadow = androidx.compose.ui.graphics.Shadow(
-            color = glowColor.copy(alpha = 0.90f * glowPulse),
-            offset = Offset.Zero,
-            blurRadius = 10f * glowPulse + 2f
-        )
-    )
-
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 4.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = if (connected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-                border = BorderStroke(
-                    1.dp,
-                    if (connected) MaterialTheme.colorScheme.primary.copy(alpha = 0.24f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f)
-                )
-            ) {
+            Icon(
+                imageVector = Icons.Default.Bluetooth,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
-                    text = glowText,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                    style = glowStyle
-                )
-            }
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                Text(
-                    text = selectedDeviceName.ifBlank { "No BLE device selected" },
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    text = selectedDeviceName.ifBlank { "No paired device selected" },
+                    style = MaterialTheme.typography.labelLarge
                 )
                 Text(
                     text = connectionHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            if (connected) {
-                TextButton(
-                    onClick = onOpenBluetooth,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("Manage")
-                }
-            } else if (canReconnect) {
-                TextButton(
-                    onClick = onReconnectBluetooth,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("Reconnect")
-                }
-            } else {
-                TextButton(
-                    onClick = onOpenBluetooth,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
-                ) {
-                    Text("Connect")
-                }
+            TextButton(onClick = onOpenBluetooth) {
+                Text("Connect")
             }
         }
     }
@@ -588,13 +59,13 @@ private fun EmptyThreadHint(connected: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 8.dp),
+            .padding(horizontal = 18.dp, vertical = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp)
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(
             text = if (connected) "No messages yet" else "Chat stays clear until the link is live",
-            style = MaterialTheme.typography.titleSmall,
+            style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground
         )
         Text(
@@ -616,37 +87,22 @@ private fun BluetoothDeviceDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Nearby BLE devices") },
+        title = { Text("Paired Bluetooth devices") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Turn on BLE on the ESP32, then refresh to scan and select it here. If Android scan results are empty, paired devices will still appear below.",
+                    "Pair the ESP32 in Android Bluetooth settings first, then select it here.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(onClick = onRefresh) {
-                        if (vm.isScanning) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        } else {
-                            Text("Refresh")
-                        }
-                    }
-                    if (vm.selectedBluetoothAddress.isNotBlank()) {
-                        OutlinedButton(onClick = { onConnect(BluetoothDeviceInfo(name = vm.selectedBluetoothName.ifBlank { "Unnamed device" }, address = vm.selectedBluetoothAddress)) }) {
-                            Text("Reconnect last device")
-                        }
-                    }
+                    FilledTonalButton(onClick = onRefresh) { Text("Refresh") }
                     if (vm.connectionState == ConnectionState.CONNECTED) {
                         OutlinedButton(onClick = onDisconnect) { Text("Disconnect") }
                     }
                 }
                 if (vm.bluetoothDevices.isEmpty()) {
-                    Text("No BLE devices found.")
+                    Text("No paired Bluetooth devices found.")
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         vm.bluetoothDevices.forEach { device ->
@@ -684,189 +140,44 @@ private fun BluetoothDeviceDialog(
     )
 }
 
-private suspend fun sendGpsMessage(
-    context: android.content.Context,
-    vm: E220ChatViewModel,
-    onError: (String) -> Unit
-) {
-    val location = resolveCurrentLocation(context)
-    if (location == null) {
-        onError("Unable to read GPS location. Turn on location services and try again.")
-        return
-    }
-    vm.sendMessage(buildGpsMessage(location.latitude, location.longitude), onError)
-}
-
 @Composable
 private fun MessageBubble(message: ChatMessage) {
-    val uriHandler = LocalUriHandler.current
-    val links = remember(message.text) { extractClickableMessageLinks(message.text) }
-    val bodyStyle = MaterialTheme.typography.bodyMedium.copy(
-        lineHeight = 20.sp,
-        color = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
-    )
-    val annotatedText = buildAnnotatedString {
-        append(message.text)
-        links.forEach { link ->
-            addStyle(
-                SpanStyle(
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline
-                ),
-                start = link.start,
-                end = link.end
-            )
-            addStringAnnotation(
-                tag = "URL",
-                annotation = link.url,
-                start = link.start,
-                end = link.end
-            )
-        }
-    }
-
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 0.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (message.sent) Arrangement.End else Arrangement.Start
     ) {
-        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val bubbleMaxWidth = maxWidth * 0.85f
-            Surface(
-                shape = if (message.sent) {
-                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 20.dp, bottomEnd = 4.dp)
-                } else {
-                    RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp, bottomStart = 4.dp, bottomEnd = 20.dp)
-                },
-                color = if (message.sent) {
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.96f)
-                } else {
-                    MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 1f)
-                },
-                contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                border = BorderStroke(
-                    1.dp,
-                    if (message.sent) {
-                        MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
-                    } else {
-                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
-                    }
-                ),
-                tonalElevation = 0.dp,
-                shadowElevation = 0.dp,
-                modifier = Modifier
-                    .widthIn(max = bubbleMaxWidth)
-                    .align(if (message.sent) Alignment.CenterEnd else Alignment.CenterStart)
+        Surface(
+            shape = if (message.sent) {
+                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 22.dp, bottomEnd = 8.dp)
+            } else {
+                RoundedCornerShape(topStart = 22.dp, topEnd = 22.dp, bottomStart = 8.dp, bottomEnd = 22.dp)
+            },
+            color = if (message.sent) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+            contentColor = if (message.sent) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(0.78f)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Bottom
             ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    ClickableText(
-                        text = annotatedText,
-                        style = bodyStyle,
-                        onClick = { offset ->
-                            links.firstOrNull { offset >= it.start && offset < it.end }?.let { link ->
-                                uriHandler.openUri(link.url)
-                            }
-                        }
+                Text(
+                    text = message.text,
+                    modifier = Modifier.weight(1f, fill = false),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (message.sent && message.delivered) {
+                    Icon(
+                        imageVector = Icons.Default.Done,
+                        contentDescription = "Sent",
+                        modifier = Modifier.size(16.dp)
                     )
-                    if (message.sent) {
-                        Text(
-                            text = "✓ Sent",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
                 }
             }
         }
     }
 }
 
-@Composable
-private fun ConfigSectionCard(
-    title: String,
-    subtitle: String,
-    modifier: Modifier = Modifier,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.18f)),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            Text(
-                subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            content()
-        }
-    }
-}
-
-@Composable
-private fun StatusChip(text: String, colors: StatusChipColors) {
-    Surface(
-        color = colors.container,
-        contentColor = colors.content,
-        shape = RoundedCornerShape(999.dp),
-        border = BorderStroke(1.dp, colors.content.copy(alpha = 0.22f))
-    ) {
-        Text(
-            text = text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-        )
-    }
-}
-
-@Composable
-private fun WifiSignalBars(
-    rssi: Int,
-    modifier: Modifier = Modifier,
-    tint: Color = MaterialTheme.colorScheme.primary
-) {
-    val activeBars = when {
-        rssi >= -50 -> 4
-        rssi >= -60 -> 3
-        rssi >= -70 -> 2
-        rssi >= -80 -> 1
-        else -> 0
-    }
-    val barHeights = listOf(8.dp, 12.dp, 16.dp, 20.dp)
-    Row(
-        modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        barHeights.forEachIndexed { index, height ->
-            val active = index < activeBars
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(height)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(tint.copy(alpha = if (active) 0.95f else 0.18f))
-            )
-        }
-    }
-}
-
-private data class StatusChipColors(
-    val container: Color,
-    val content: Color
-)
-
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(
     vm: E220ChatViewModel,
@@ -876,308 +187,114 @@ private fun SettingsScreen(
     onReboot: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val scroll = rememberScrollState()
-
-    LaunchedEffect(vm.selectedTab, vm.connectionState) {
-        if (vm.selectedTab == AppTab.RADIO && vm.connectionState == ConnectionState.CONNECTED) {
-            onRefresh()
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        vm.configError?.let { ErrorBanner(it) }
-        vm.configStatus?.takeIf { it.isNotBlank() }?.let { SuccessBanner(it) }
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f)
-                .verticalScroll(scroll),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(18.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                tonalElevation = 1.dp
-            ) {
-                Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        "Manual-backed presets + ranges",
-                        style = MaterialTheme.typography.titleSmall
-                    )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        MiniChip("Freq ${vm.config.freq} MHz")
-                        MiniChip("Power ${vm.config.txpower}")
-                        MiniChip("Baud ${vm.config.baud}")
-                        MiniChip("Mode ${vm.config.txmode}")
-                    }
-                }
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("All firmware settings from the original web configurator are available here.")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiniChip("Freq ${vm.config.freq} MHz")
+                MiniChip("Addr ${vm.config.addr}")
             }
-
-            ConfigSectionCard(
-                title = "RF link",
-                subtitle = "Carrier frequency, transmit power, air rate, transmission mode, and LBT."
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "Channel / frequency",
-                        selectedValue = vm.config.freq,
-                        options = channelOptions,
-                        errorText = vm.configFieldErrors["freq"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("freq", it) }
-                    DropdownConfigField(
-                        label = "TX power",
-                        selectedValue = vm.config.txpower,
-                        options = txPowerOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("txpower", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "Air rate",
-                        selectedValue = vm.config.airrate,
-                        options = airRateOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("airrate", it) }
-                    DropdownConfigField(
-                        label = "TX mode",
-                        selectedValue = vm.config.txmode,
-                        options = txModeOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("txmode", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "LBT",
-                        selectedValue = vm.config.lbt,
-                        options = onOffOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("lbt", it) }
-                    DropdownConfigField(
-                        label = "WOR cycle",
-                        selectedValue = vm.config.worCycle,
-                        options = wakeTimeOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wor_cycle", it) }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Channel dropdown (0-83)
+                val channelOptions = (0..83).map { it.toString() to it.toString() }
+                DropdownConfigField("Channel", vm.config.freq, options = channelOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("freq", it) }
+                // TX power dropdown with common levels
+                val powerOptions = listOf(
+                    "22dBm (0)" to "0",
+                    "17dBm (1)" to "1",
+                    "14dBm (2)" to "2",
+                    "10dBm (3)" to "3",
+                    "30dBm (0)" to "0",
+                    "27dBm (1)" to "1",
+                    "24dBm (2)" to "2",
+                    "21dBm (3)" to "3",
+                    "18dBm (4)" to "4",
+                    "15dBm (5)" to "5",
+                    "12dBm (6)" to "6",
+                    "9dBm (7)" to "7",
+                    "6dBm (8)" to "8",
+                    "3dBm (9)" to "9",
+                    "0dBm (10)" to "10"
+                )
+                DropdownConfigField("TX power", vm.config.txpower, options = powerOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("txpower", it) }
             }
-
-            ConfigSectionCard(
-                title = "Serial link",
-                subtitle = "UART baud, parity, packet length, and frame-drop timing."
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "Baud",
-                        selectedValue = vm.config.baud,
-                        options = baudOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("baud", it) }
-                    DropdownConfigField(
-                        label = "Parity",
-                        selectedValue = vm.config.parity,
-                        options = parityOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("parity", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "Packet length",
-                        selectedValue = vm.config.subpkt,
-                        options = packetLengthOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("subpkt", it) }
-                    ConfigField(
-                        label = "URXT",
-                        value = vm.config.urxt,
-                        supportingText = "Manual range: 1–255 byte times. Default 3.",
-                        errorText = vm.configFieldErrors["urxt"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("urxt", it) }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Baud rate dropdown
+                val baudOptions = listOf(
+                    "1200 (0)" to "0",
+                    "2400 (1)" to "1",
+                    "4800 (2)" to "2",
+                    "9600 (3)" to "3",
+                    "19200 (4)" to "4",
+                    "38400 (5)" to "5",
+                    "57600 (6)" to "6",
+                    "115200 (7)" to "7"
+                )
+                DropdownConfigField("Baud", vm.config.baud, options = baudOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("baud", it) }
+                // Air rate dropdown
+                val airRateOptions = listOf(
+                    "2.4Kbps (0)" to "0",
+                    "2.4Kbps (1)" to "1",
+                    "2.4Kbps (2)" to "2",
+                    "4.8Kbps (3)" to "3",
+                    "9.6Kbps (4)" to "4",
+                    "19.2Kbps (5)" to "5",
+                    "38.4Kbps (6)" to "6",
+                    "62.5Kbps (7)" to "7"
+                )
+                DropdownConfigField("Air rate", vm.config.airrate, options = airRateOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("airrate", it) }
             }
-
-            ConfigSectionCard(
-                title = "Addressing & encryption",
-                subtitle = "Communication address, destination, and 16-bit key fields."
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "Address",
-                        value = vm.config.addr,
-                        supportingText = "Manual range: 0–65535. 65535 is broadcast.",
-                        errorText = vm.configFieldErrors["addr"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("addr", it) }
-                    ConfigField(
-                        label = "Destination",
-                        value = vm.config.dest,
-                        supportingText = "Manual range: 0–65535. Defaults to 65535.",
-                        errorText = vm.configFieldErrors["dest"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("dest", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "Crypto high",
-                        value = vm.config.cryptH,
-                        supportingText = "App-specific 16-bit key high byte.",
-                        errorText = vm.configFieldErrors["crypt_h"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("crypt_h", it) }
-                    ConfigField(
-                        label = "Crypto low",
-                        value = vm.config.cryptL,
-                        supportingText = "App-specific 16-bit key low byte.",
-                        errorText = vm.configFieldErrors["crypt_l"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("crypt_l", it) }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("Address", vm.config.addr, modifier = Modifier.weight(1f)) { vm.setConfigField("addr", it) }
+                ConfigField("Dest Address", vm.config.dest, modifier = Modifier.weight(1f)) { vm.setConfigField("dest", it) }
             }
-
-            ConfigSectionCard(
-                title = "WiFi settings",
-                subtitle = "Mirror the ESP32 WiFi config fields returned by the firmware."
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "WiFi enabled",
-                        selectedValue = vm.config.wifiEnabled,
-                        options = onOffOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_enabled", it) }
-                    DropdownConfigField(
-                        label = "WiFi mode",
-                        selectedValue = vm.config.wifiMode,
-                        options = wifiModeOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_mode", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "AP SSID",
-                        value = vm.config.wifiApSsid,
-                        supportingText = "Access point name broadcast by the ESP32.",
-                        errorText = vm.configFieldErrors["wifi_ap_ssid"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_ap_ssid", it) }
-                    ConfigField(
-                        label = "AP password",
-                        value = vm.config.wifiApPassword,
-                        isPassword = true,
-                        supportingText = "Password for the ESP32 access point.",
-                        errorText = vm.configFieldErrors["wifi_ap_password"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_ap_password", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "STA SSID",
-                        value = vm.config.wifiStaSsid,
-                        supportingText = "Upstream network name for station mode.",
-                        errorText = vm.configFieldErrors["wifi_sta_ssid"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_sta_ssid", it) }
-                    ConfigField(
-                        label = "STA password",
-                        value = vm.config.wifiStaPassword,
-                        isPassword = true,
-                        supportingText = "Password for the upstream WiFi network.",
-                        errorText = vm.configFieldErrors["wifi_sta_password"],
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("wifi_sta_password", it) }
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("Packet Length", vm.config.subpkt, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("subpkt", it) }
+                ConfigField("Parity", vm.config.parity, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("parity", it) }
             }
-
-            ConfigSectionCard(
-                title = "RSSI and save",
-                subtitle = "Optional RSSI helpers, LBT threshold, timeout, and save mode."
-            ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DropdownConfigField(
-                        label = "RSSI noise",
-                        selectedValue = vm.config.rssiNoise,
-                        options = onOffOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("rssi_noise", it) }
-                    DropdownConfigField(
-                        label = "RSSI byte",
-                        selectedValue = vm.config.rssiByte,
-                        options = onOffOptions,
-                        modifier = Modifier.weight(1f)
-                    ) { vm.setConfigField("rssi_byte", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "LBT RSSI",
-                        value = vm.config.lbrRssi,
-                        supportingText = "Manual range: 0 to -128 dBm. Default -55.",
-                        errorText = vm.configFieldErrors["lbr_rssi"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("lbr_rssi", it) }
-                    ConfigField(
-                        label = "LBT timeout",
-                        value = vm.config.lbrTimeout,
-                        supportingText = "Manual range: 0–65535 ms. Default 2000.",
-                        errorText = vm.configFieldErrors["lbr_timeout"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("lbr_timeout", it) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "Save type",
-                        value = vm.config.saveType,
-                        supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
-                        errorText = vm.configFieldErrors["savetype"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("savetype", it) }
-                    Spacer(modifier = Modifier.weight(1f))
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // TX mode dropdown
+                val txModeOptions = listOf(
+                    "Transparent (0)" to "0",
+                    "Fixed-point (1)" to "1"
+                )
+                DropdownConfigField("TX mode", vm.config.txmode, options = txModeOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("txmode", it) }
+                // LBT dropdown
+                val lbtOptions = listOf(
+                    "Off (0)" to "0",
+                    "On (1)" to "1"
+                )
+                DropdownConfigField("LBT", vm.config.lbt, options = lbtOptions, modifier = Modifier.weight(1f)) { vm.setConfigField("lbt", it) }
             }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onRefresh, modifier = Modifier.weight(1f)) {
-                    Icon(Icons.Default.Refresh, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Refresh")
-                }
-                FilledTonalButton(onClick = onQuickSave, modifier = Modifier.weight(1f)) {
-                    Text("Quick save")
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("LBT RSSI", vm.config.lbrRssi, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("lbr_rssi", it) }
+                ConfigField("LBT Timeout", vm.config.lbrTimeout, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("lbr_timeout", it) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                Button(onClick = onSave, modifier = Modifier.weight(1f)) {
-                    Text("Save config")
-                }
-                FilledTonalButton(onClick = onReboot, modifier = Modifier.weight(1f)) {
-                    Text("Reboot ESP32")
-                }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("Frame Drop", vm.config.urxt, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("urxt", it) }
+                ConfigField("RSSI noise", vm.config.rssiNoise, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("rssi_noise", it) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("RSSI byte", vm.config.rssiByte, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("rssi_byte", it) }
+                ConfigField("WOR cycle", vm.config.worCycle, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("wor_cycle", it) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("Crypto high", vm.config.cryptH, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("crypt_h", it) }
+                ConfigField("Crypto low", vm.config.cryptL, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("crypt_l", it) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ConfigField("Save Type", vm.config.saveType, modifier = Modifier.weight(1f), keyboardType = KeyboardType.Number) { vm.setConfigField("savetype", it) }
             }
         }
     }
 }
+
 @Composable
 private fun DebugScreen(
     vm: E220ChatViewModel,
     onRefresh: () -> Unit,
     onClear: () -> Unit,
-    onToggleDebug: (Boolean) -> Unit,
+    onTogglePause: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scroll = rememberScrollState()
@@ -1188,29 +305,6 @@ private fun DebugScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        ElevatedCard(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.weight(1f)) {
-                    Text("Debug auto-refresh", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "Enable live debug polling. Manual refresh still works when off.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-                Switch(
-                    checked = vm.debugEnabled,
-                    onCheckedChange = onToggleDebug
-                )
-            }
-        }
-
         if (vm.diagnosticsError != null) ErrorBanner(vm.diagnosticsError!!)
 
         ElevatedCard(Modifier.fillMaxWidth()) {
@@ -1273,6 +367,11 @@ private fun DebugScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Clear")
                     }
+                    FilledTonalButton(onClick = onTogglePause) {
+                        Icon(if (vm.debugPaused) Icons.Default.PlayArrow else Icons.Default.Pause, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (vm.debugPaused) "Resume" else "Pause")
+                    }
                 }
                 Surface(shape = RoundedCornerShape(16.dp), tonalElevation = 1.dp) {
                     Text(
@@ -1321,9 +420,6 @@ private fun ConfigField(
     value: String,
     modifier: Modifier = Modifier,
     keyboardType: KeyboardType = KeyboardType.Text,
-    isPassword: Boolean = false,
-    supportingText: String? = null,
-    errorText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     OutlinedTextField(
@@ -1331,559 +427,44 @@ private fun ConfigField(
         onValueChange = onValueChange,
         modifier = modifier,
         label = { Text(label) },
-        supportingText = when {
-            errorText != null -> ({ Text(errorText) })
-            supportingText != null -> ({ Text(supportingText) })
-            else -> null
-        },
-        isError = errorText != null,
         singleLine = true,
-        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
-        keyboardOptions = KeyboardOptions(
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
             keyboardType = keyboardType,
             imeAction = ImeAction.Next
-        ),
-        shape = RoundedCornerShape(14.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedBorderColor = MaterialTheme.colorScheme.primary,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-            errorBorderColor = MaterialTheme.colorScheme.error,
-            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-            unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-            errorTextColor = MaterialTheme.colorScheme.error,
-            focusedLabelColor = MaterialTheme.colorScheme.primary,
-            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            errorLabelColor = MaterialTheme.colorScheme.error,
-            cursorColor = MaterialTheme.colorScheme.primary,
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            errorContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-            focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            errorSupportingTextColor = MaterialTheme.colorScheme.error
         )
     )
 }
 
 // Dropdown version for fields with limited options
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DropdownConfigField(
     label: String,
     selectedValue: String,
     options: List<Pair<String, String>>, // display, actual
     modifier: Modifier = Modifier,
-    supportingText: String? = null,
-    errorText: String? = null,
     onValueChange: (String) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val displayText = options.find { it.second == selectedValue }?.first ?: selectedValue
     ExposedDropdownMenuBox(
         expanded = expanded,
-        onExpandedChange = { expanded = it },
-        modifier = modifier
+        onExpandedChange = { expanded = it }
     ) {
         OutlinedTextField(
             value = displayText,
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
-            supportingText = when {
-                errorText != null -> ({ Text(errorText) })
-                supportingText != null -> ({ Text(supportingText) })
-                else -> null
-            },
-            isError = errorText != null,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-            modifier = Modifier
-                .menuAnchor()
-                .fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                errorBorderColor = MaterialTheme.colorScheme.error,
-                focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                errorTextColor = MaterialTheme.colorScheme.error,
-                focusedLabelColor = MaterialTheme.colorScheme.primary,
-                unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                errorLabelColor = MaterialTheme.colorScheme.error,
-                cursorColor = MaterialTheme.colorScheme.primary,
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                errorContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                errorSupportingTextColor = MaterialTheme.colorScheme.error
-            )
+            modifier = modifier.width(IntrinsicSize.Min)
         )
-        ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
-        ) {
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             options.forEach { (display, actual) ->
-                DropdownMenuItem(
-                    text = { Text(display) },
-                    onClick = {
-                        onValueChange(actual)
-                        expanded = false
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun WifiScreen(
-    vm: E220ChatViewModel,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val scroll = rememberScrollState()
-    var selectedNetwork by remember { mutableStateOf<WifiNetwork?>(null) }
-    var wifiPassword by remember { mutableStateOf("") }
-    var apPasswordDraft by remember(vm.wifiStatus.apPassword) { mutableStateOf(vm.wifiStatus.apPassword) }
-    val wifiSupported = vm.wifiApiSupported
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .verticalScroll(scroll)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        if (vm.wifiError != null) ErrorBanner(vm.wifiError!!)
-
-        ConfigSectionCard(
-            title = "WiFi Status",
-            subtitle = "Current connectivity and IP address."
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("WiFi enabled", style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            text = if (vm.wifiStatus.enabled) "ESP32 WiFi is on" else "ESP32 WiFi is off",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = vm.wifiStatus.enabled,
-                        enabled = wifiSupported,
-                        onCheckedChange = { enabled ->
-                            vm.setWifiEnabled(
-                                enabled = enabled,
-                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                                onSuccess = {
-                                    if (!enabled) {
-                                        selectedNetwork = null
-                                        wifiPassword = ""
-                                    }
-                                }
-                            )
-                        }
-                    )
-                }
-                Text("Enabled: ${if (vm.wifiStatus.enabled) "Yes" else "No"}", style = MaterialTheme.typography.bodyMedium)
-                Text("Mode: ${vm.wifiStatus.mode}", style = MaterialTheme.typography.bodyMedium)
-                if (vm.wifiStatus.mode == "AP") {
-                    Text("AP SSID: ${vm.wifiStatus.apSsid.ifBlank { "Not set" }}", style = MaterialTheme.typography.bodyMedium)
-                    Text("AP IP: ${vm.wifiStatus.apIp.ifBlank { "Not assigned" }}", style = MaterialTheme.typography.bodyMedium)
-                } else {
-                    Text("STA SSID: ${vm.wifiStatus.staSsid.ifBlank { "Not set" }}", style = MaterialTheme.typography.bodyMedium)
-                    Text("Connected: ${if (vm.wifiStatus.staConnected) "Yes" else "No"}", style = MaterialTheme.typography.bodyMedium)
-                    Text("STA IP: ${vm.wifiStatus.staIp.ifBlank { "Not assigned" }}", style = MaterialTheme.typography.bodyMedium)
-                }
-            }
-        }
-
-        ConfigSectionCard(
-            title = "WiFi Control",
-            subtitle = "Switch modes and manage connectivity."
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { vm.refreshWifi() },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Refresh")
-                    }
-                    Button(
-                        onClick = {
-                            vm.disconnectWifi(
-                                onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                                onSuccess = { vm.refreshWifi() }
-                            )
-                        },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Disconnect")
-                    }
-                }
-
-                if (vm.wifiStatus.mode == "AP") {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ConfigField(
-                            label = "AP Password",
-                            value = apPasswordDraft,
-                            supportingText = "Set the password for the ESP32 Access Point.",
-                            modifier = Modifier.fillMaxWidth(),
-                            isPassword = true
-                        ) { pwd ->
-                            apPasswordDraft = pwd
-                        }
-                        Button(
-                            onClick = {
-                                vm.setWifiApPassword(
-                                    apPasswordDraft,
-                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                                    onSuccess = { vm.refreshWifi() }
-                                )
-                            },
-                            enabled = apPasswordDraft != vm.wifiStatus.apPassword,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Save AP password")
-                        }
-                    }
-                }
-            }
-        }
-
-        ConfigSectionCard(
-            title = "Station Mode",
-            subtitle = "Connect the ESP32 to an existing WiFi network."
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!wifiSupported) {
-                    Text(
-                        text = "WiFi controls aren't supported by the current firmware build.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { vm.scanWifiNetworks() },
-                        enabled = wifiSupported && vm.wifiStatus.enabled && !vm.wifiScanInProgress,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        if (vm.wifiScanInProgress) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(18.dp),
-                                strokeWidth = 2.dp
-                            )
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        Text(if (vm.wifiScanInProgress) "Scanning" else "Scan")
-                    }
-                    Button(
-                        onClick = {
-                            val network = selectedNetwork
-                            if (network != null) {
-                                val connectPassword = if (network.encrypted) wifiPassword else ""
-                                vm.connectWifi(
-                                    ssid = network.ssid,
-                                    password = connectPassword,
-                                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                                    onSuccess = {
-                                        selectedNetwork = null
-                                        wifiPassword = ""
-                                        vm.refreshWifi()
-                                        vm.scanWifiNetworks()
-                                    }
-                                )
-                            }
-                        },
-                        enabled = wifiSupported && vm.wifiStatus.enabled && selectedNetwork != null,
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Text("Connect")
-                    }
-                }
-
-                if (vm.wifiScanInProgress || vm.wifiScanResult.scan.status != "idle") {
-                    val scan = vm.wifiScanResult.scan
-                    val isScanning = vm.wifiScanInProgress || scan.status.equals("scanning", ignoreCase = true)
-                    val isSuccess = scan.status.equals("success", ignoreCase = true)
-                    val isError = scan.status.equals("error", ignoreCase = true)
-                    val chipText = when {
-                        isScanning -> "SCANNING"
-                        isSuccess -> "SUCCESS"
-                        isError -> "ERROR"
-                        else -> scan.status.uppercase()
-                    }
-                    val chipColors = when {
-                        isScanning -> StatusChipColors(
-                            container = Color(0xFFFFF4CC),
-                            content = Color(0xFF8A6A00)
-                        )
-                        isSuccess -> StatusChipColors(
-                            container = Color(0xFFDFF3E3),
-                            content = Color(0xFF11662E)
-                        )
-                        isError -> StatusChipColors(
-                            container = Color(0xFFFFE3E1),
-                            content = Color(0xFFB3261E)
-                        )
-                        else -> StatusChipColors(
-                            container = MaterialTheme.colorScheme.surfaceVariant,
-                            content = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    if (isScanning) "Scan in progress" else "Last scan",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                StatusChip(text = chipText, colors = chipColors)
-                            }
-                            if (isScanning) {
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                    Text(
-                                        text = "Still scanning for networks. Older phones may need a little longer to receive the result.",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            } else {
-                                Text("Status: ${scan.status}", style = MaterialTheme.typography.bodyMedium)
-                                Text("Networks: ${scan.networkCount}", style = MaterialTheme.typography.bodyMedium)
-                                Text("Duration: ${scan.durationMs} ms", style = MaterialTheme.typography.bodyMedium)
-                                Text("Requested at: ${scan.requestedAtMs} ms", style = MaterialTheme.typography.bodyMedium)
-                                Text("Completed at: ${scan.completedAtMs} ms", style = MaterialTheme.typography.bodyMedium)
-                                if (scan.errorCode != null) {
-                                    Text("ESP32 error code: ${scan.errorCode}", style = MaterialTheme.typography.bodyMedium)
-                                }
-                                if (scan.error.isNotBlank()) {
-                                    Text(
-                                        text = scan.error,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (vm.wifiStatus.enabled && vm.wifiNetworks.isNotEmpty()) {
-                    val visibleNetworks = vm.wifiNetworks.sortedByDescending { it.rssi }
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        if (visibleNetworks.size > 1) {
-                            Text(
-                                text = "Sorted by signal strength",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        visibleNetworks.forEach { net ->
-                            val isSelected = selectedNetwork?.ssid == net.ssid
-                            val isConnected = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staConnected
-                            val savedPasswordAvailable = vm.wifiStatus.staSsid == net.ssid && vm.wifiStatus.staPassword.isNotBlank()
-                            val cardContainer = when {
-                                isSelected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
-                                isConnected -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
-                                else -> MaterialTheme.colorScheme.surfaceContainerLow
-                            }
-                            val cardBorderColor = when {
-                                isSelected -> MaterialTheme.colorScheme.primary
-                                isConnected -> MaterialTheme.colorScheme.tertiary
-                                else -> MaterialTheme.colorScheme.outlineVariant
-                            }
-                            val signalTint = when {
-                                isConnected -> MaterialTheme.colorScheme.tertiary
-                                isSelected -> MaterialTheme.colorScheme.primary
-                                else -> MaterialTheme.colorScheme.onSurfaceVariant
-                            }
-                            Card(
-                                modifier = Modifier.fillMaxWidth(),
-                                colors = CardDefaults.cardColors(containerColor = cardContainer),
-                                border = BorderStroke(if (isSelected || isConnected) 2.dp else 1.dp, cardBorderColor),
-                                onClick = {
-                                    selectedNetwork = net
-                                    wifiPassword = if (savedPasswordAvailable) vm.wifiStatus.staPassword else ""
-                                }
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(12.dp),
-                                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.Top
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                            Text(net.ssid, style = MaterialTheme.typography.bodyMedium)
-                                            Text(
-                                                text = "Channel ${net.channel} • ${if (net.encrypted) "Encrypted" else "Open"}",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                        Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                            WifiSignalBars(
-                                                rssi = net.rssi,
-                                                tint = signalTint,
-                                                modifier = Modifier.width(48.dp)
-                                            )
-                                            Text(
-                                                text = "${net.rssi} dBm",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-                                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        if (isSelected) {
-                                            StatusChip(
-                                                text = "SELECTED",
-                                                colors = StatusChipColors(
-                                                    container = MaterialTheme.colorScheme.primary,
-                                                    content = MaterialTheme.colorScheme.onPrimary
-                                                )
-                                            )
-                                        }
-                                        if (isConnected) {
-                                            StatusChip(
-                                                text = "CONNECTED",
-                                                colors = StatusChipColors(
-                                                    container = MaterialTheme.colorScheme.tertiary,
-                                                    content = MaterialTheme.colorScheme.onTertiary
-                                                )
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                } else if (vm.wifiError == null && vm.wifiStatus.enabled) {
-                    Text("No networks scanned yet.", style = MaterialTheme.typography.bodySmall)
-                } else if (!vm.wifiStatus.enabled) {
-                    Text("Turn WiFi on to scan for networks or connect to one.", style = MaterialTheme.typography.bodySmall)
-                }
-
-                selectedNetwork?.let { network ->
-                    val savedPasswordAvailable = vm.wifiStatus.staSsid == network.ssid && vm.wifiStatus.staPassword.isNotBlank()
-                    val canConnect = !network.encrypted || wifiPassword.length >= 8
-                    OutlinedCard(modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier.padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("Selected network", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                                Text(network.ssid, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    text = "Channel ${network.channel} • ${network.rssi} dBm • ${if (network.encrypted) "Encrypted" else "Open"}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (network.encrypted) {
-                                OutlinedTextField(
-                                    value = wifiPassword,
-                                    onValueChange = { wifiPassword = it },
-                                    label = { Text("Password") },
-                                    placeholder = { Text("Enter WiFi password") },
-                                    supportingText = {
-                                        Text(if (savedPasswordAvailable) "Saved password is available for this SSID." else "WPA2 passwords need at least 8 characters.")
-                                    },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    shape = RoundedCornerShape(14.dp),
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    keyboardOptions = KeyboardOptions(
-                                        keyboardType = KeyboardType.Password,
-                                        imeAction = ImeAction.Done
-                                    ),
-                                    colors = OutlinedTextFieldDefaults.colors(
-                                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
-                                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                        focusedLabelColor = MaterialTheme.colorScheme.primary,
-                                        unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        cursorColor = MaterialTheme.colorScheme.primary,
-                                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                                        focusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        unfocusedSupportingTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                )
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                OutlinedButton(
-                                    onClick = { wifiPassword = vm.wifiStatus.staPassword },
-                                    enabled = savedPasswordAvailable,
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Use saved password")
-                                }
-                                Button(
-                                    enabled = canConnect,
-                                    onClick = {
-                                        val connectPassword = if (network.encrypted) wifiPassword else ""
-                                        vm.connectWifi(
-                                            ssid = network.ssid,
-                                            password = connectPassword,
-                                            onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                                            onSuccess = {
-                                                selectedNetwork = null
-                                                wifiPassword = ""
-                                                vm.refreshWifi()
-                                                vm.scanWifiNetworks()
-                                            }
-                                        )
-                                    },
-                                    modifier = Modifier.weight(1f)
-                                ) {
-                                    Text("Connect")
-                                }
-                            }
-                            TextButton(
-                                onClick = {
-                                    selectedNetwork = null
-                                    wifiPassword = ""
-                                },
-                                modifier = Modifier.align(Alignment.End)
-                            ) {
-                                Text("Clear selection")
-                            }
-                        }
-                    }
+                DropdownMenuItem(onClick = {
+                    onValueChange(actual)
+                    expanded = false
+                }) {
+                    Text(display)
                 }
             }
         }

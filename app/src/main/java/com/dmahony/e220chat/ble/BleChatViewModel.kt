@@ -51,7 +51,8 @@ class BleChatViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { repo.announceProfile(myUserId24, username) }
     }
 
-    fun applyConfig(cfg: BleConfig) {
-        viewModelScope.launch { repo.applyConfig(cfg) }
+    override fun onCleared() {
+        repo.dispose()
+        super.onCleared()
     }
 }

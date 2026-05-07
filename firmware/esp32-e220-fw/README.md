@@ -1,30 +1,14 @@
-# ESP32 E220 Bluetooth Firmware
+# ESP32 E220 Firmware
 
-Bluetooth-only companion firmware for the E220 Android app in this repo.
-It runs on an ESP32 + Ebyte E220 LoRa module, exposes a BLE GATT link to the Android app, and forwards chat/config requests to the radio.
+Bluetooth-only companion firmware for the E220 Android app in this repository. It runs on an ESP32 with an Ebyte E220 LoRa module, exposes a BLE GATT interface to the Android client, and forwards chat and configuration requests to the radio.
 
 ## What it does
 
-- Exposes a Bluetooth LE (BLE) GATT link for the Android app
-- Uses a binary framed protocol over BLE
-- Keeps the E220 chat/config behavior from the original project
+- Exposes a BLE link for the Android app
+- Uses the binary protocol described in `../../BLE_LAYER_V2.md`
+- Keeps radio messaging, configuration, WiFi, and diagnostics state in sync with the app
 - Stores configuration in ESP32 Preferences
 - Uses UART2 to talk to the E220 module
-
-## Bluetooth protocol
-
-The Android app talks to the firmware over a binary framed protocol, not JSON.
-See `../../BLE_LAYER_V2.md` for the frame format, message types, and payloads.
-
-The firmware uses these message types:
-
-- `TEXT`
-- `ACK`
-- `STATUS`
-- `CONFIG`
-- `PROFILE`
-- `ERROR`
-- `WHOIS`
 
 ## Hardware
 
@@ -41,11 +25,12 @@ Typical ESP32 wiring to the E220 module:
 | GND | GND | Ground |
 
 Notes:
-- RX/TX are unchanged.
-- M0, M1, and AUX were moved off the boot-strapping pins to avoid startup issues.
-- Use a stable 3.3V supply for the E220 module.
-- Keep the antenna connected before powering the radio.
-- The Android app expects the ESP32 to advertise a stable device name.
+
+- RX and TX stay on GPIO21 and GPIO22
+- M0, M1, and AUX are moved off boot-strapping pins
+- Use a stable 3.3V supply for the radio
+- Keep the antenna connected before powering the module
+- The Android app expects a stable BLE device name
 
 ## Build
 
@@ -63,28 +48,13 @@ python3 -m venv /tmp/pio-venv
 PATH=/tmp/pio-venv/bin:$PATH platformio run -e esp32dev
 ```
 
-## Connect the ESP32 for flashing
-
-Use a USB-to-serial connection to the ESP32 board.
-
-Typical connections:
-
-- ESP32 5V or 3.3V power from the USB serial adapter or dev board
-- GND to GND
-- TX on the adapter to RX0 on the ESP32
-- RX on the adapter to TX0 on the ESP32
-
-If the board does not auto-enter flash mode, hold BOOT while pressing EN/RESET, then release EN/RESET first and BOOT second.
-
-If your board already has a built-in USB interface, just connect the USB cable and select the resulting serial port.
-
 ## Upload
 
 ```bash
 pio run -t upload --upload-port /dev/ttyUSB0
 ```
 
-Replace `/dev/ttyUSB0` with the port for your board. Common alternatives are `/dev/ttyUSB1` or `/dev/serial/by-id/...`.
+Replace `/dev/ttyUSB0` with the serial port for your board.
 
 If you want to build and upload in one step:
 
@@ -94,18 +64,18 @@ PATH=/tmp/pio-venv/bin:$PATH platformio run -e esp32dev -t upload --upload-port 
 
 After upload, the ESP32 should reset automatically. If it does not, press EN/RESET once.
 
-## Android app pairing flow
+## Pairing flow
 
-1. Flash the firmware to the ESP32.
-2. Power the board and wait for Bluetooth advertising.
-3. Open the Android app.
-4. Scan for the ESP32 device and connect.
-5. Use the Chat, Settings, and Debug tabs in the app.
+1. Flash the firmware to the ESP32
+2. Power the board and wait for Bluetooth advertising
+3. Open the Android app
+4. Scan for the ESP32 device and connect
+5. Use the Chat, Radio, WiFi, and Debug tabs
 
 ## Notes
 
-- This firmware is Bluetooth-only; it does not expose an HTTP interface at runtime.
-- The E220 radio link still uses the module's UART interface internally.
-- The canonical firmware implementation lives in `src/main.cpp`.
-- The legacy top-level `esp32_e220_ble.ino` is kept only as a reference stub.
-- If you change the Bluetooth device name or protocol, update the Android app to match.
+- This firmware is Bluetooth-only at runtime
+- The radio still uses UART internally
+- The canonical implementation lives in `src/main.cpp`
+- If you change the BLE device name or protocol, update the Android app to match
+- See `../../BLE_LAYER_V2.md` for the protocol layout and message types

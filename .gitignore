@@ -1,18 +1,46 @@
-# Android / Gradle
+# Gradle
 .gradle/
-**/build/
-local.properties
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Android
 *.apk
 *.aab
-
-# IntelliJ / Android Studio
-.idea/
-*.iml
+*.dex
+*.class
 *.log
+gen/
 
-# PlatformIO / firmware
-.pio/
-
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+
+# IDE
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+
+# Local config
+local.properties
+
+# Generated
+app/build/
+*/build/
+
+# Secrets
+*.keystore
+*.jks
+*.p12
+google-services.json
+
+# PlatformIO
+.pio/
+
+# Environment
+.env
+.venv/
+venv/

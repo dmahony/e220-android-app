@@ -41,12 +41,14 @@ class BleTypesTest {
             wifiApSsid = "AP-SSID",
             wifiApPassword = "ap-pass",
             wifiStaSsid = "STA-SSID",
-            wifiStaPassword = "sta-pass"
+            wifiStaPassword = "sta-pass",
+            bleSecurity = 1,
+            bleSecret = "secret123"
         )
 
         val payload = cfg.toPayload()
 
-        assertEquals(33 + 1 + cfg.username.length + 1 + cfg.wifiApSsid.length + 1 + cfg.wifiApPassword.length + 1 + cfg.wifiStaSsid.length + 1 + cfg.wifiStaPassword.length, payload.size)
+        assertEquals(33 + 1 + cfg.username.length + 1 + cfg.wifiApSsid.length + 1 + cfg.wifiApPassword.length + 1 + cfg.wifiStaSsid.length + 1 + cfg.wifiStaPassword.length + 1 + 1 + cfg.bleSecret.length, payload.size)
         assertEquals(0x00.toByte(), payload[0])
         assertEquals(0xC8.toByte(), payload[1])
         assertEquals(5.toByte(), payload[2])
@@ -80,6 +82,18 @@ class BleTypesTest {
         assertEquals(0xFE.toByte(), payload[30])
         assertEquals(1.toByte(), payload[31])
         assertEquals(2.toByte(), payload[32])
+        // name length-prefixed field, then wifi strings follow
+        // offset after fixed header + name + wifi strings = before bleSecurity
+        // fixed header: 0..32 (33 bytes)
+        // name: byte 33 = length(6), bytes 34-39 = "node-A"
+        // wifiApSsid: byte 40 = 7, bytes 41-47 = "AP-SSID"
+        // wifiApPassword: byte 48 = 7, bytes 49-55 = "ap-pass"
+        // wifiStaSsid: byte 56 = 8, bytes 57-64 = "STA-SSID"
+        // wifiStaPassword: byte 65 = 8, bytes 66-73 = "sta-pass"
+        // bleSecurity: byte 74 = 1
+        assertEquals(1.toByte(), payload[74])
+        // bleSecret: byte 75 = 9 ("secret123"), bytes 76-84
+        assertEquals(9.toByte(), payload[75])
     }
 
     @Test

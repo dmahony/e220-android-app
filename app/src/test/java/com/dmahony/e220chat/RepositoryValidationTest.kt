@@ -52,4 +52,27 @@ class RepositoryValidationTest {
             assertEquals("Select a channel frequency from the manual", e.fieldErrors["freq"])
         }
     }
+
+    @Test
+    fun `validateConfig requires WiFi SSIDs when those modes are enabled`() {
+        val apErrors = validateConfig(
+            E220Config(
+                wifiEnabled = "1",
+                wifiMode = "AP",
+                wifiApSsid = "",
+                wifiApPassword = "correcthorsebatterystaple"
+            )
+        )
+        assertEquals("AP SSID is required when WiFi AP mode is enabled", apErrors["wifi_ap_ssid"])
+
+        val staErrors = validateConfig(
+            E220Config(
+                wifiEnabled = "1",
+                wifiMode = "STA",
+                wifiStaSsid = "",
+                wifiStaPassword = ""
+            )
+        )
+        assertEquals("STA SSID is required when WiFi STA mode is enabled", staErrors["wifi_sta_ssid"])
+    }
 }
