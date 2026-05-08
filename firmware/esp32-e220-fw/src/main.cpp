@@ -767,19 +767,21 @@ void setupBle() {
   gServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *svc = gServer->createService(SERVICE_UUID);
-  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE);
-  gTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-  gStatusChar = svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
-
-  gRxChar->setCallbacks(new RxCallbacks());
-  gConfigChar->setCallbacks(new ConfigCallbacks());
+  svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE);
+  svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+  svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
+  svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
 
   svc->start();
 
-  // Re-set callbacks after start() — NimBLE may replace characteristic objects
-  gRxChar->setCallbacks(new RxCallbacks());
-  gConfigChar->setCallbacks(new ConfigCallbacks());
+  // NimBLE replaces characteristic objects during start() — re-fetch pointers
+  gRxChar = svc->getCharacteristic(RX_UUID);
+  gTxChar = svc->getCharacteristic(TX_UUID);
+  gStatusChar = svc->getCharacteristic(STATUS_UUID);
+  gConfigChar = svc->getCharacteristic(CONFIG_UUID);
+
+  if (gRxChar) gRxChar->setCallbacks(new RxCallbacks());
+  if (gConfigChar) gConfigChar->setCallbacks(new ConfigCallbacks());
 
   // configure security: bonding + LE Secure Connections
   // ESP32 has no display/keyboard, so use Just Works pairing (encrypted, no MITM)
