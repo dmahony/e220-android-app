@@ -1,26 +1,69 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
+
+fun gitOutput(vararg args: String): String? {
+    return try {
+        val process = ProcessBuilder(listOf("git", *args))
+            .directory(rootDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        if (process.waitFor() == 0) output.takeIf { it.isNotEmpty() } else null
+    } catch (_: Exception) {
+        null
+    }
+}
+
+fun computeVersionCode(): Int {
+    val override = providers.gradleProperty("appVersionCode").orNull?.toIntOrNull()
+        ?: System.getenv("APP_VERSION_CODE")?.toIntOrNull()
+    if (override != null && override > 0) return override
+
+    val commitCount = gitOutput("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+    return 1000 + commitCount
+}
+
+fun computeVersionName(): String {
+    val override = providers.gradleProperty("appVersionName").orNull
+        ?: System.getenv("APP_VERSION_NAME")
+    if (!override.isNullOrBlank()) return override
+
+    val exactTag = gitOutput("describe", "--tags", "--exact-match")
+    if (!exactTag.isNullOrBlank()) return exactTag
+
+    val commitCount = gitOutput("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+    val shortHash = gitOutput("rev-parse", "--short=8", "HEAD") ?: "local"
+    return "0.1.0-dev.$commitCount+$shortHash"
+}
+
+val releaseKeystorePath = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE").orNull
+val releaseKeystorePassword = providers.environmentVariable("ANDROID_RELEASE_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("ANDROID_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("ANDROID_RELEASE_KEY_PASSWORD").orNull
+val hasReleaseSigningConfig = !releaseKeystorePath.isNullOrBlank() &&
+    !releaseKeystorePassword.isNullOrBlank() &&
+    !releaseKeyAlias.isNullOrBlank() &&
+    !releaseKeyPassword.isNullOrBlank()
 
 android {
     namespace = "com.dmahony.e220chat"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.dmahony.e220chat"
         minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        targetSdk = 35
+        versionCode = computeVersionCode()
+        versionName = computeVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildFeatures {
         compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
     }
     kotlinOptions {
         jvmTarget = "17"
@@ -36,13 +79,28 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigningConfig) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = requireNotNull(releaseKeystorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             isMinifyEnabled = false
@@ -53,24 +111,22 @@ android {
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
     implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.3")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.3")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.activity:activity-compose:1.9.0")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.navigation:navigation-compose:2.7.7")
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation("androidx.datastore:datastore-preferences:1.2.1")
     implementation("com.google.android.material:material:1.12.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("org.json:json:20240303")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

@@ -1,0 +1,69 @@
+# Dependabot configuration
+#
+# Manages dependency updates for:
+#   - Gradle (Android app + root project dependencies)
+#   - GitHub Actions (CI workflow actions)
+#   - pip (firmware PlatformIO dependencies)
+
+version: 2
+updates:
+  - package-ecosystem: "gradle"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "gradle"
+    groups:
+      kotlin:
+        patterns:
+          - "org.jetbrains.kotlin*"
+        update-types:
+          - "minor"
+          - "patch"
+      compose:
+        patterns:
+          - "androidx.compose*"
+        update-types:
+          - "minor"
+          - "patch"
+      lifecycle:
+        patterns:
+          - "androidx.lifecycle*"
+        update-types:
+          - "minor"
+          - "patch"
+      okhttp:
+        patterns:
+          - "com.squareup.okhttp3*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    groups:
+      actions:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+
+  - package-ecosystem: "pip"
+    directory: "/firmware/esp32-e220-fw"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+      - "firmware"
