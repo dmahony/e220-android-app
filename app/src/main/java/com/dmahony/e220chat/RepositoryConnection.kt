@@ -28,6 +28,10 @@ internal fun E220Repository.stopBleScan() = bleScanner.stopBleScan()
 
 @SuppressLint("MissingPermission")
 internal suspend fun E220Repository.connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
+    if (!isHardenedBleSupported()) {
+        throw ApiException(hardenedBleUnsupportedMessage())
+    }
+
     if (useBinaryTransport) {
         if (!hasBluetoothConnectPermission()) {
             throw ApiException("Grant Bluetooth permissions first")

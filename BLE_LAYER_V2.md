@@ -6,6 +6,19 @@ This document describes the binary BLE protocol used between the Android app in 
 
 The app connects to the ESP32 over BLE, writes framed binary messages, and listens for notifications. The transport is notification-driven; there is no polling loop for chat data.
 
+## Security model
+
+- Android 12+ uses bonded/encrypted BLE links before the app can read or write the protected STATUS and CONFIG characteristics.
+- RX writes are also encrypted on the ESP32 side, preventing unauthenticated local writes to the radio bridge.
+- Android 11 / API 30 is intentionally unsupported for the hardened BLE path because the ESP32 NimBLE bonding flow prevented service discovery on LineageOS 18.1 during prior validation.
+- The Android client now gates hardened BLE connection setup on API 31+ instead of silently weakening the protections for newer releases.
+
+Threats mitigated:
+
+- Unencrypted local BLE reads of device/config state
+- Unauthenticated writes to the ESP32 radio bridge
+- Reintroduction of the legacy insecure BLE fallback that was previously used to work around Android 11
+
 ## Components
 
 ### Android

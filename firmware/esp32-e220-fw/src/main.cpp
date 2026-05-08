@@ -86,7 +86,7 @@ struct Config {
   char wifiStaSsid[32] = "";
   char wifiStaPassword[32] = "";
   // BLE security
-  uint8_t bleSecurity = 0; // 0=none, 1=bonding+encryption
+  uint8_t bleSecurity = 1; // 0=none, 1=bonding+encryption
   char bleSecret[16] = "e220-secret";
 };
 
@@ -841,10 +841,10 @@ void setupBle() {
   gServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *svc = gServer->createService(SERVICE_UUID);
-  svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE);
+  svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE_ENC | NIMBLE_PROPERTY::WRITE_NR);
   svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
-  svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
-  svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
+  svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::NOTIFY);
+  svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ_ENC | NIMBLE_PROPERTY::WRITE_ENC);
 
   svc->start();
 
@@ -921,8 +921,8 @@ void sendBleFrame(const Frame &f) {
     Serial.printf("[BLE] sendBleFrame skip type=%02X connected=%d handle=%u\n", f.type, (int)connected, connHandle);
     return;
   }
-  if (gCfg.bleSecurity >= 1 && !encrypted && f.requireAck) {
-    Serial.println("[BLE] Rejected send — link not encrypted, dropping reliable frame");
+  if (gCfg.bleSecurity >= 1 && !encrypted) {
+    Serial.println("[BLE] Rejected send — link not encrypted, dropping frame");
     return;
   }
 

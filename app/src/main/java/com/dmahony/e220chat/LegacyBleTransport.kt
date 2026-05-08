@@ -57,6 +57,9 @@ internal class LegacyBleTransport(
 
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String): BluetoothDeviceInfo = withContext(Dispatchers.IO) {
+        if (!isHardenedBleSupported()) {
+            throw IOException(hardenedBleUnsupportedMessage())
+        }
         val device = adapter?.getRemoteDevice(address) ?: throw IOException("No BLE adapter/device")
         val connectDeferred = CompletableDeferred<Unit>()
         val descriptorDeferred = CompletableDeferred<Unit>()

@@ -12,12 +12,17 @@ import android.bluetooth.BluetoothGattService
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
 import androidx.core.content.ContextCompat
+import com.dmahony.e220chat.hardenedBleUnsupportedMessage
+import com.dmahony.e220chat.isHardenedBleSupported
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,6 +61,10 @@ class BleUartManager(context: Context) {
     private var reconnectJob: Job? = null
     private var connectedAddress: String? = null
 
+    // Bond state tracking for encrypted link on API 31+ (Android 12+)
+    private var bondDeferred: CompletableDeferred<Unit>? = null
+    private var bondReceiver: BroadcastReceiver? = null
+
     private var pendingConnect: CompletableDeferred<Unit>? = null
     private var pendingDiscover: CompletableDeferred<Unit>? = null
     private var pendingMtu: CompletableDeferred<Unit>? = null
@@ -83,7 +92,7 @@ class BleUartManager(context: Context) {
         val CONFIG_UUID: UUID = UUID.fromString("9f6d0005-6f52-4d94-b43f-2ef6f3ed7a10")
         val CCC_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
-        private const val CONNECT_TIMEOUT_MS = 10000L
+        private const val CONNECT_TIMEOUT_MS = 25000L  // includes up to 15s bonding
         private const val WRITE_TIMEOUT_MS = 3000L
         private const val ACK_TIMEOUT_MS = 350L
         private const val MAX_RETRY = 4
@@ -99,6 +108,9 @@ class BleUartManager(context: Context) {
 
     @SuppressLint("MissingPermission")
     suspend fun connect(address: String) = withContext(Dispatchers.IO) {
+        if (!isHardenedBleSupported()) {
+            throw IOException(hardenedBleUnsupportedMessage())
+        }
         if (!hasConnectPermission()) throw SecurityException("BLUETOOTH_CONNECT not granted")
 
         val device = adapter?.getRemoteDevice(address) ?: throw IOException("No BLE adapter/device")
@@ -269,6 +281,12 @@ class BleUartManager(context: Context) {
         gatt?.disconnect()
         gatt?.close()
         gatt = null
+
+        // Clean up any pending bond receiver
+        bondDeferred?.cancel()
+        bondDeferred = null
+        bondReceiver?.let { try { app.unregisterReceiver(it) } catch (_: Exception) {} }
+        bondReceiver = null
     }
 
     @SuppressLint("MissingPermission")
@@ -290,6 +308,51 @@ class BleUartManager(context: Context) {
                 if (!g.writeDescriptor(d)) throw IOException("writeDescriptor failed")
             }
             withTimeout(WRITE_TIMEOUT_MS) { dd.await() }
+        }
+    }
+
+    /**
+     * Ensure BLE bond is established before using encrypted characteristics.
+     * On API 31+ (Android 12+), the ESP32 firmware requires encryption for
+     * WRITE_ENC / READ_ENC characteristics. Android 11 (API 30) is unsupported
+     * because NimBLE bonding on the ESP32 prevented service discovery on
+     * LineageOS 18.1.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun ensureBond(device: BluetoothDevice) {
+        if (!isHardenedBleSupported()) return
+        if (device.bondState == BluetoothDevice.BOND_BONDED) return
+
+        val bd = CompletableDeferred<Unit>()
+        synchronized(this) { bondDeferred = bd }
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                if (intent.action != BluetoothDevice.ACTION_BOND_STATE_CHANGED) return
+                val bondDevice = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                if (bondDevice?.address != device.address) return
+                when (intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, BluetoothDevice.ERROR)) {
+                    BluetoothDevice.BOND_BONDED -> bd.complete(Unit)
+                    BluetoothDevice.BOND_NONE -> bd.completeExceptionally(
+                        IOException("BLE bonding failed")
+                    )
+                }
+            }
+        }
+        synchronized(this) { bondReceiver = receiver }
+        app.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+
+        try {
+            if (!device.createBond()) {
+                throw IOException("createBond() returned false")
+            }
+            withTimeout(15000L) { bd.await() }
+        } finally {
+            synchronized(this) {
+                bondReceiver = null
+                bondDeferred = null
+            }
+            try { app.unregisterReceiver(receiver) } catch (_: Exception) {}
         }
     }
 
@@ -347,6 +410,12 @@ class BleUartManager(context: Context) {
                 runCatching { enableNotify(g, statusChar!!) }
                     .onFailure { Log.w(TAG, "statusChar notify failed, retrying once", it) }
                     .getOrElse { runCatching { enableNotify(g, statusChar!!) }.onFailure { Log.e(TAG, "statusChar notify failed after retry", it) } }
+
+                // Establish bond on API 31+ before using encrypted characteristics.
+                // Android 11 (API 30) is unsupported: NimBLE bonding prevented service
+                // discovery on LineageOS 18.1.
+                ensureBond(g.device)
+
                 pendingDiscover?.complete(Unit)
                 pendingDiscover = null
             }

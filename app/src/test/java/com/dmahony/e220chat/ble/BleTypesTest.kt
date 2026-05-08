@@ -132,5 +132,37 @@ class BleTypesTest {
         assertEquals(2, status.fwMinor)
         assertEquals(3, status.fwPatch)
         assertEquals(0xAABBCC, status.deviceId24)
+        assertEquals(false, status.bleEncrypted)
+    }
+
+    @Test
+    fun `status payload with encrypted flag parses correctly`() {
+        // 19-byte payload with bleEncrypted=1 at byte 18
+        val payload = byteArrayOf(
+            0x03,                   // flowState
+            0x0A, 0x0B,             // battery
+            0xB8.toByte(),          // rssi
+            0x01,                   // qBleRx
+            0x02,                   // qRadioTx
+            0x03,                   // qRadioRx
+            0x04,                   // qBleTx
+            0x01, 0x02, 0x03, 0x04, // uptime
+            0x01,                   // fwMaj
+            0x02,                   // fwMin
+            0x03,                   // fwPatch
+            0xAA.toByte(), 0xBB.toByte(), 0xCC.toByte(), // deviceId
+            0x01                    // bleEncrypted = 1
+        )
+        val status = StatusTelemetry.fromPayload(payload)
+        assertEquals(true, status.bleEncrypted)
+        assertEquals(FlowState.TX_DONE, status.flowState)
+    }
+
+    @Test
+    fun `config payload defaults to security enabled`() {
+        // Default BleConfig should have bleSecurity=1 (bonding+encryption enabled)
+        val cfg = BleConfig(userId24 = 0x123456, username = "test")
+        assertEquals(1, cfg.bleSecurity)
+        assertEquals("e220-secret", cfg.bleSecret)
     }
 }
