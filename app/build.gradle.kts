@@ -51,12 +51,12 @@ val hasReleaseSigningConfig = !releaseKeystorePath.isNullOrBlank() &&
 
 android {
     namespace = "com.dmahony.e220chat"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.dmahony.e220chat"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 35
         versionCode = computeVersionCode()
         versionName = computeVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

@@ -267,7 +267,7 @@ void notifyChunked(NimBLECharacteristic *c, const uint8_t *data, size_t len) {
   connected = gBleClientConnected;
   connHandle = gBleConnHandle;
   portEXIT_CRITICAL(&gBleStateMux);
-  if (!c || !connected || connHandle == 0 || data == nullptr || len == 0) return;
+  if (!c || !connected || data == nullptr || len == 0) return;
 
   const size_t chunkSize = currentBleNotifyPayloadMax();
   size_t offset = 0;
@@ -728,9 +728,11 @@ class ServerCallbacks : public NimBLEServerCallbacks {
 class RxCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c) override {
     std::string v = c->getValue();
+    Serial.printf("[BLE] Rx write len=%u\n", (unsigned)v.size());
     Frame f{};
     for (size_t i = 0; i < v.size(); ++i) {
       if (decodeByte(gBleParser, (uint8_t)v[i], f)) {
+        Serial.printf("[BLE] Rx decoded type=%02X seq=%u\n", f.type, f.seq);
         if (!gBleRxQueue.push(f)) enqueueError(0x01, f.type, "BLE_RX_QUEUE_FULL");
       }
     }
@@ -780,6 +782,8 @@ void setupBle() {
   gStatusChar = svc->getCharacteristic(STATUS_UUID);
   gConfigChar = svc->getCharacteristic(CONFIG_UUID);
 
+  Serial.printf("[BLE] After start: rx=%p tx=%p status=%p config=%p\n", gRxChar, gTxChar, gStatusChar, gConfigChar);
+
   if (gRxChar) gRxChar->setCallbacks(new RxCallbacks());
   if (gConfigChar) gConfigChar->setCallbacks(new ConfigCallbacks());
 
@@ -821,12 +825,16 @@ void sendBleFrame(const Frame &f) {
   connHandle = gBleConnHandle;
   encrypted = gBleEncrypted;
   portEXIT_CRITICAL(&gBleStateMux);
-  if (!connected || connHandle == 0) return;
+  if (!connected) {
+    Serial.printf("[BLE] sendBleFrame skip type=%02X connected=%d handle=%u\n", f.type, (int)connected, connHandle);
+    return;
+  }
   if (gCfg.bleSecurity >= 1 && !encrypted && f.requireAck) {
     Serial.println("[BLE] Rejected send — link not encrypted, dropping reliable frame");
     return;
   }
 
+  Serial.printf("[BLE] sendBleFrame type=%02X seq=%u bytes=%u\n", f.type, f.seq, (unsigned)n);
   notifyChunked(gTxChar, raw, n);
 
   if (f.requireAck) {
