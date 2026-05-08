@@ -767,7 +767,7 @@ void setupBle() {
   gServer->setCallbacks(new ServerCallbacks());
 
   NimBLEService *svc = gServer->createService(SERVICE_UUID);
-  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  gRxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE);
   gTxChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
   gStatusChar = svc->createCharacteristic(STATUS_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::NOTIFY);
   gConfigChar = svc->createCharacteristic(CONFIG_UUID, NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE);
@@ -776,6 +776,10 @@ void setupBle() {
   gConfigChar->setCallbacks(new ConfigCallbacks());
 
   svc->start();
+
+  // Re-set callbacks after start() — NimBLE may replace characteristic objects
+  gRxChar->setCallbacks(new RxCallbacks());
+  gConfigChar->setCallbacks(new ConfigCallbacks());
 
   // configure security: bonding + LE Secure Connections
   // ESP32 has no display/keyboard, so use Just Works pairing (encrypted, no MITM)
@@ -816,8 +820,8 @@ void sendBleFrame(const Frame &f) {
   encrypted = gBleEncrypted;
   portEXIT_CRITICAL(&gBleStateMux);
   if (!connected || connHandle == 0) return;
-  if (gCfg.bleSecurity >= 1 && !encrypted) {
-    Serial.println("[BLE] Rejected send — link not encrypted");
+  if (gCfg.bleSecurity >= 1 && !encrypted && f.requireAck) {
+    Serial.println("[BLE] Rejected send — link not encrypted, dropping reliable frame");
     return;
   }
 

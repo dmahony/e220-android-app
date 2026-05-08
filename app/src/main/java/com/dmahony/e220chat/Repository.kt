@@ -52,7 +52,7 @@ class E220Repository(context: Context) {
         selectedDeviceAddressProvider = { selectedDeviceAddress },
         displayBluetoothName = ::displayBluetoothName
     )
-    internal val useBinaryTransport = false  // legacy GATT path for older devices
+    internal val useBinaryTransport = true
     internal val binaryChatMessages = mutableListOf<ChatMessage>()
     internal var binaryChatSequence = 0
     internal var binaryChatReset = false

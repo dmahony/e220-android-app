@@ -63,7 +63,7 @@ internal class LegacyBleGattCallback(private val transport: LegacyBleTransport) 
         }
         val notifyChar = transport.txCharacteristic ?: return
         gatt.setCharacteristicNotification(notifyChar, true)
-        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
         val descriptor = notifyChar.getDescriptor(LegacyBleTransport.CLIENT_CONFIG_UUID)
         if (descriptor == null) {
             transport.pendingConnect?.completeExceptionally(IOException("BLE notification descriptor not found"))

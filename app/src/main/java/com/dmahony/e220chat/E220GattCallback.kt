@@ -70,7 +70,7 @@ internal class E220GattCallback(private val repo: E220Repository) : BluetoothGat
         }
         val notifyChar = repo.txCharacteristic ?: return
         gatt.setCharacteristicNotification(notifyChar, true)
-        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
         val descriptor = notifyChar.getDescriptor(E220Repository.CLIENT_CONFIG_UUID)
         if (descriptor == null) {
             repo.pendingConnect?.completeExceptionally(IOException("BLE notification descriptor not found"))
