@@ -918,6 +918,7 @@ void queueRadioTextFromBle(const Frame &in) {
     pushStatusFrame(true);
     return;
   }
+  Serial.printf("[DBG] Radio TX queued type=%02X seq=%u len=%u\n", out.type, out.seq, out.len);
   updateFlowState(FLOW_TX_IN_PROGRESS);
   pushStatusFrame(true);
 }
@@ -971,6 +972,7 @@ void sendRadioFrame(const Frame &f) {
   uint8_t raw[260];
   const size_t n = encodeFrame(f, raw, sizeof(raw));
   if (n == 0) return;
+  Serial.printf("[DBG] Radio TX sending type=%02X seq=%u bytes=%u\n", f.type, f.seq, (unsigned)n);
   E220.write(raw, n);
 }
 
@@ -991,6 +993,7 @@ void pumpRadioRxBytes() {
   while (E220.available()) {
     uint8_t b = (uint8_t)E220.read();
     if (decodeByte(gRadioParser, b, f)) {
+      Serial.printf("[DBG] Radio RX decoded type=%02X seq=%u len=%u\n", f.type, f.seq, f.len);
       if (!gRadioRxQueue.push(f)) {
         enqueueError(0x30, f.type, "RADIO_RX_QUEUE_FULL");
       }
@@ -1001,6 +1004,7 @@ void pumpRadioRxBytes() {
 void processRadioRxQueue() {
   Frame in{};
   while (gRadioRxQueue.pop(in)) {
+    Serial.printf("[DBG] Radio RX forwarding type=%02X seq=%u len=%u\n", in.type, in.seq, in.len);
     if (in.type == MSG_TEXT || in.type == MSG_PROFILE) {
       Frame out{};
       out.type = in.type;
