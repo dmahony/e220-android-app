@@ -1038,6 +1038,7 @@ void processBleRxQueue() {
         break;
 
       case MSG_CONFIG:
+        processBleTxQueue();  // flush ACK before blocking E220 operations
         applyConfigPayload(in.payload, in.len);
         writeE220Config();
         refreshE220RadioConfig(false);  // verify write took effect

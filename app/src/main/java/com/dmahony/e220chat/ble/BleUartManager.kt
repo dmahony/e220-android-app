@@ -341,8 +341,12 @@ class BleUartManager(context: Context) {
                 // Set connected before enableNotify so ACKs for early frames aren't dropped
                 _connected.value = true
 
-                enableNotify(g, txChar!!)
-                enableNotify(g, statusChar!!)
+                runCatching { enableNotify(g, txChar!!) }
+                    .onFailure { Log.w(TAG, "txChar notify failed, retrying once", it) }
+                    .getOrElse { runCatching { enableNotify(g, txChar!!) }.onFailure { Log.e(TAG, "txChar notify failed after retry", it) } }
+                runCatching { enableNotify(g, statusChar!!) }
+                    .onFailure { Log.w(TAG, "statusChar notify failed, retrying once", it) }
+                    .getOrElse { runCatching { enableNotify(g, statusChar!!) }.onFailure { Log.e(TAG, "statusChar notify failed after retry", it) } }
                 pendingDiscover?.complete(Unit)
                 pendingDiscover = null
             }

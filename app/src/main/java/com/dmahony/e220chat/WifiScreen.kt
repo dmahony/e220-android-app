@@ -74,7 +74,8 @@ import kotlinx.coroutines.launch
 @Composable
 internal fun WifiScreen(
     vm: E220ChatViewModel,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     val scroll = rememberScrollState()
@@ -90,6 +91,11 @@ internal fun WifiScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (onBack != null) {
+            TextButton(onClick = onBack) {
+                Text("← Back to Settings")
+            }
+        }
         if (vm.wifiError != null) ErrorBanner(vm.wifiError!!)
 
         ConfigSectionCard(

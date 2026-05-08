@@ -68,7 +68,7 @@ internal object E220ConfigMapper {
             rssiNoise = cfg.rssiNoise.toString(),
             rssiByte = cfg.rssiByte.toString(),
             urxt = cfg.maxRetries.toString(),
-            worCycle = cfg.radioTxIntervalMs.toString(),
+            worCycle = cfg.worCycle.toString(),
             cryptH = cfg.cryptH.toString(),
             cryptL = cfg.cryptL.toString(),
             lbrTimeout = cfg.ackTimeoutMs.toString(),
@@ -96,7 +96,7 @@ internal object E220ConfigMapper {
         return BleConfig(
             ackTimeoutMs = config.lbrTimeout.toIntOrNull()?.coerceIn(60, 2000) ?: current.ackTimeoutMs,
             maxRetries = config.urxt.toIntOrNull()?.coerceIn(1, 10) ?: current.maxRetries,
-            radioTxIntervalMs = config.worCycle.toIntOrNull()?.coerceIn(20, 2000) ?: current.radioTxIntervalMs,
+            radioTxIntervalMs = current.radioTxIntervalMs,
             statusIntervalMs = config.lbrRssi.toIntOrNull()?.coerceIn(200, 5000) ?: current.statusIntervalMs,
             profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
             userId24 = userId,

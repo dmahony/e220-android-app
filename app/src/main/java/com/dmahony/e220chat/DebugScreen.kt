@@ -77,7 +77,8 @@ internal fun DebugScreen(
     onRefresh: () -> Unit,
     onClear: () -> Unit,
     onToggleDebug: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null
 ) {
     val scroll = rememberScrollState()
     Column(
@@ -87,6 +88,11 @@ internal fun DebugScreen(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (onBack != null) {
+            TextButton(onClick = onBack) {
+                Text("← Back to Settings")
+            }
+        }
         ElevatedCard(Modifier.fillMaxWidth()) {
             Row(
                 modifier = Modifier
