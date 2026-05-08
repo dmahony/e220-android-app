@@ -110,7 +110,7 @@ android {
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.activity:activity-compose:1.9.0")
