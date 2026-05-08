@@ -338,10 +338,11 @@ class BleUartManager(context: Context) {
                 if (!g.requestMtu(TARGET_MTU)) md.complete(Unit)
                 runCatching { withTimeout(WRITE_TIMEOUT_MS) { md.await() } }
 
+                // Set connected before enableNotify so ACKs for early frames aren't dropped
+                _connected.value = true
+
                 enableNotify(g, txChar!!)
                 enableNotify(g, statusChar!!)
-
-                _connected.value = true
                 pendingDiscover?.complete(Unit)
                 pendingDiscover = null
             }
@@ -424,7 +425,7 @@ class BleUartManager(context: Context) {
                         // app->esp ACK via reliable channel
                         runCatching {
                             val ack = BleFrame(MsgType.ACK, frame.seq, byteArrayOf(), requireAck = false)
-                            if (_connected.value) writeFrame(ack)
+                            writeFrame(ack)
                         }
                     }
                     _frames.emit(frame)

@@ -5,9 +5,18 @@ import kotlinx.coroutines.withContext
 
 internal suspend fun E220Repository.getConfig(): E220Config {
     if (useBinaryTransport) {
-        val cfg = bleV2.readConfigCharacteristic()
-        binaryConfig = cfg
-        return E220ConfigMapper.toLegacy(cfg)
+        val cfg = runCatching { bleV2.readConfigCharacteristic() }.getOrNull()
+        if (cfg != null) {
+            binaryConfig = cfg
+            return E220ConfigMapper.toLegacy(cfg)
+        }
+        // GATT read failed — fall back to frame-based config if available
+        val frameCfg = binaryConfig
+        if (frameCfg != null) {
+            appendTransportLog(TransportDirection.INFO, "Using frame-based config (GATT read unavailable)")
+            return E220ConfigMapper.toLegacy(frameCfg)
+        }
+        throw ApiException("Config not available — neither GATT nor frame-based")
     }
     return E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigGetRequest()))
 }

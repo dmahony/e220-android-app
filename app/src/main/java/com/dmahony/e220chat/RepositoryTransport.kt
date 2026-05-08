@@ -436,6 +436,7 @@ internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {
             MsgType.STATUS -> {
                 runCatching { StatusTelemetry.fromPayload(frame.payload) }.onSuccess { st ->
                     binaryStatus = st
+                    android.util.Log.d("E220Status", "flow=${st.flowState} rssi=${st.lastRssi} qBRx=${st.qBleRx} qRTx=${st.qRadioTx} qRRx=${st.qRadioRx} qBTx=${st.qBleTx} devId=${st.deviceId24.toString(16)}")
                 }
             }
             MsgType.ACK, MsgType.WHOIS -> Unit

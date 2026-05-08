@@ -12,6 +12,16 @@ internal fun freqStringToChannelOrFallback(freq: String, fallbackChannel: Int): 
 }
 
 internal object E220ConfigMapper {
+    /** Convert a baud rate (1200-115200) to E220 register index (0-7).
+     *  Values 0-7 pass through as-is (already register indices).
+     *  Values >7 are treated as actual baud rates and mapped to their register index. */
+    private fun baudToReg(baud: Int): Int = when (baud) {
+        in 0..7 -> baud  // already a register index
+        1200 -> 0; 2400 -> 1; 4800 -> 2; 9600 -> 3
+        19200 -> 4; 38400 -> 5; 57600 -> 6; 115200 -> 7
+        else -> 3  // default 9600 = reg 3
+    }
+
     fun defaultBinaryConfig(address: String?): BleConfig {
         val clean = address.orEmpty().replace(":", "")
         val suffix = if (clean.length >= 6) clean.takeLast(6) else "000001"
@@ -27,7 +37,7 @@ internal object E220ConfigMapper {
             username = user,
             channel = 0,
             txpower = 21,
-            baud = 9600,
+            baud = 3,  // register index for 9600 baud
             parity = 0,
             airrate = 2,
             txmode = 0,
@@ -93,7 +103,7 @@ internal object E220ConfigMapper {
             username = username,
             channel = freqStringToChannelOrFallback(config.freq, current.channel),
             txpower = config.txpower.toIntOrNull() ?: current.txpower,
-            baud = config.baud.toIntOrNull() ?: current.baud,
+            baud = baudToReg(config.baud.toIntOrNull() ?: current.baud),
             parity = config.parity.toIntOrNull() ?: current.parity,
             airrate = config.airrate.toIntOrNull() ?: current.airrate,
             txmode = config.txmode.toIntOrNull() ?: current.txmode,

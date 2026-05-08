@@ -54,7 +54,9 @@ internal suspend fun E220Repository.connect(address: String): BluetoothDeviceInf
             )
         )
         runCatching { bleV2.requestWhois() }
-        runCatching { binaryConfig = bleV2.readConfigCharacteristic() }
+        runCatching { binaryConfig = bleV2.readConfigCharacteristic() }.onFailure { e ->
+            appendTransportLog(TransportDirection.INFO, "Config read via GATT failed (will use frame-based config): ${e.message}")
+        }
         return@withContext BluetoothDeviceInfo(name = name, address = address)
     }
 
