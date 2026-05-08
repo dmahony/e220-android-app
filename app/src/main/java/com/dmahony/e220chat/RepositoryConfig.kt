@@ -1,11 +1,23 @@
 package com.dmahony.e220chat
 
+import com.dmahony.e220chat.ble.BleConfig
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+private suspend fun E220Repository.readBinaryConfigWithRetry(): BleConfig? {
+    repeat(3) { attempt ->
+        val cfg = runCatching { bleV2.readConfigCharacteristic() }.getOrNull()
+        if (cfg != null) return cfg
+        if (attempt < 2) {
+            delay(250L * (attempt + 1))
+        }
+    }
+    return null
+}
+
 internal suspend fun E220Repository.getConfig(): E220Config {
     if (useBinaryTransport) {
-        val cfg = runCatching { bleV2.readConfigCharacteristic() }.getOrNull()
+        val cfg = readBinaryConfigWithRetry()
         if (cfg != null) {
             binaryConfig = cfg
             return E220ConfigMapper.toLegacy(cfg)
