@@ -26,6 +26,7 @@ internal object E220ConfigMapper {
         val clean = address.orEmpty().replace(":", "")
         val suffix = if (clean.length >= 6) clean.takeLast(6) else "000001"
         val id = suffix.toIntOrNull(16)?.coerceIn(1, 0xFFFFFF) ?: 1
+        val addr16 = (id and 0xFFFF).let { if (it == 0) 1 else it }
         val user = "u${suffix.uppercase()}".take(19)
         return BleConfig(
             ackTimeoutMs = 180,
@@ -50,7 +51,7 @@ internal object E220ConfigMapper {
             cryptH = 0,
             cryptL = 0,
             saveType = 1,
-            addr = id,
+            addr = 0x0000,
             dest = 0xFFFF
         )
     }
@@ -74,7 +75,7 @@ internal object E220ConfigMapper {
             lbrTimeout = cfg.ackTimeoutMs.toString(),
             lbrRssi = cfg.statusIntervalMs.toString(),
             saveType = cfg.profileIntervalSec.toString(),
-            addr = "0x${cfg.addr.toString(16).padStart(4, '0').uppercase()}",
+            addr = "0x${(cfg.addr and 0xFFFF).toString(16).padStart(4, '0').uppercase()}",
             dest = "0x${cfg.dest.toString(16).padStart(4, '0').uppercase()}",
             wifiEnabled = cfg.wifiEnabled.toString(),
             wifiMode = when (cfg.wifiMode) {

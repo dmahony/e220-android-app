@@ -22,13 +22,12 @@ internal suspend fun E220Repository.getConfig(): E220Config {
             binaryConfig = cfg
             return E220ConfigMapper.toLegacy(cfg)
         }
-        // GATT read failed — fall back to frame-based config if available
-        val frameCfg = binaryConfig
-        if (frameCfg != null) {
-            appendTransportLog(TransportDirection.INFO, "Using frame-based config (GATT read unavailable)")
-            return E220ConfigMapper.toLegacy(frameCfg)
+        // GATT read failed — fall back to cached or default config instead of surfacing an error.
+        val fallback = binaryConfig ?: E220ConfigMapper.defaultBinaryConfig(selectedDeviceAddress).also {
+            binaryConfig = it
         }
-        throw ApiException("Config not available — neither GATT nor frame-based")
+        appendTransportLog(TransportDirection.INFO, "Using fallback config (GATT read unavailable)")
+        return E220ConfigMapper.toLegacy(fallback)
     }
     return E220Protocol.parseConfigResponse(exchange(E220Protocol.buildConfigGetRequest()))
 }
@@ -37,8 +36,11 @@ internal suspend fun E220Repository.saveConfig(config: E220Config): E220Config =
     if (useBinaryTransport) {
         val cfg = E220ConfigMapper.toBinary(config, binaryConfig ?: E220ConfigMapper.defaultBinaryConfig(selectedDeviceAddress))
         bleV2.writeConfig(cfg)
-        val live = bleV2.readConfigCharacteristic()
+        val live = runCatching { bleV2.readConfigCharacteristic() }.getOrNull() ?: cfg
         binaryConfig = live
+        if (live === cfg) {
+            appendTransportLog(TransportDirection.INFO, "Config write applied; using written config as fallback")
+        }
         return@withContext E220ConfigMapper.toLegacy(live)
     }
 

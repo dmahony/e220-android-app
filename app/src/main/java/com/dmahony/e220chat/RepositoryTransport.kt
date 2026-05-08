@@ -400,8 +400,7 @@ internal fun E220Repository.appendTransportLog(direction: TransportDirection, pa
     }
 
 internal fun E220Repository.parseDestinationUserId(): Int {
-        val cfg = binaryConfig ?: E220ConfigMapper.defaultBinaryConfig(selectedDeviceAddress)
-        return cfg.userId24
+        return 0xFFFF
     }
 
 internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {

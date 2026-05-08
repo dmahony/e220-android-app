@@ -2,6 +2,7 @@ package com.dmahony.e220chat
 
 import kotlinx.serialization.json.*
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -50,6 +51,14 @@ class E220ProtocolTest {
         assertEquals("0x0001", config?.get("addr")?.jsonPrimitive?.content)
         assertEquals("1", config?.get("txmode")?.jsonPrimitive?.content.toString())
         assertEquals("34", config?.get("crypt_l")?.jsonPrimitive?.content.toString())
+    }
+
+    @Test
+    fun `default binary config uses broadcast-safe default address in legacy form`() {
+        val legacy = E220ConfigMapper.toLegacy(E220ConfigMapper.defaultBinaryConfig("3C:71:BF:6B:E4:9E"))
+
+        assertEquals("0x0000", legacy.addr)
+        assertFalse(validateConfig(legacy).containsKey("addr"))
     }
 
     @Test
