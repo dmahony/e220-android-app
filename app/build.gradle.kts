@@ -1,6 +1,7 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
 }
@@ -51,12 +52,12 @@ val hasReleaseSigningConfig = !releaseKeystorePath.isNullOrBlank() &&
 
 android {
     namespace = "com.dmahony.e220chat"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.dmahony.e220chat"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 36
         versionCode = computeVersionCode()
         versionName = computeVersionName()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -65,8 +66,10 @@ android {
     buildFeatures {
         compose = true
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
