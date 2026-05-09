@@ -400,7 +400,8 @@ internal fun E220Repository.appendTransportLog(direction: TransportDirection, pa
     }
 
 internal fun E220Repository.parseDestinationUserId(): Int {
-        return 0xFFFF
+        // Use the configured group destination so ESP32s share the same address.
+        return binaryConfig?.dest ?: 0x0001
     }
 
 internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {

@@ -77,8 +77,8 @@ struct Config {
   uint8_t cryptH = 0;
   uint8_t cryptL = 0;
   uint8_t saveType = 0;
-  uint16_t addr = 0x0000;
-  uint16_t dest = 0xFFFF;
+  uint16_t addr = 0x0001;
+  uint16_t dest = 0x0001;
   uint8_t wifiEnabled = 0;
   uint8_t wifiMode = 0;
   char wifiApSsid[32] = "";

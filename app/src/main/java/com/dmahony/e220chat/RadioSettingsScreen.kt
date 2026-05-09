@@ -24,6 +24,7 @@ internal fun RadioSettingsScreen(
     onRefresh: () -> Unit,
     onSave: () -> Unit,
     onQuickSave: () -> Unit,
+    onRestoreDefaults: () -> Unit,
     onReboot: () -> Unit,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null
@@ -179,14 +180,14 @@ internal fun RadioSettingsScreen(
                     ConfigField(
                         label = "Address",
                         value = vm.config.addr,
-                        supportingText = "Manual range: 0–65535. 65535 is broadcast.",
+                        supportingText = "Manual range: 0–65535. Shared group address defaults to 1.",
                         errorText = vm.configFieldErrors["addr"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("addr", it) }
                     ConfigField(
                         label = "Destination",
                         value = vm.config.dest,
-                        supportingText = "Manual range: 0–65535. Defaults to 65535.",
+                        supportingText = "Manual range: 0–65535. Shared group address defaults to 1.",
                         errorText = vm.configFieldErrors["dest"],
                         modifier = Modifier.weight(1f)
                     ) { vm.setConfigField("dest", it) }
@@ -273,12 +274,18 @@ internal fun RadioSettingsScreen(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                FilledTonalButton(onClick = onRestoreDefaults, modifier = Modifier.weight(1f)) {
+                    Text("Restore defaults")
+                }
                 Button(onClick = onSave, modifier = Modifier.weight(1f)) {
                     Text("Save config")
                 }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 FilledTonalButton(onClick = onReboot, modifier = Modifier.weight(1f)) {
                     Text("Reboot ESP32")
                 }
+                Spacer(modifier = Modifier.weight(1f))
             }
         }
     }

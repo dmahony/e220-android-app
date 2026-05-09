@@ -35,6 +35,7 @@ internal fun SettingsScreen(
     onRefresh: () -> Unit,
     onSave: () -> Unit,
     onQuickSave: () -> Unit,
+    onRestoreDefaults: () -> Unit,
     onReboot: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -54,6 +55,7 @@ internal fun SettingsScreen(
             onRefresh = onRefresh,
             onSave = onSave,
             onQuickSave = onQuickSave,
+            onRestoreDefaults = onRestoreDefaults,
             onReboot = onReboot,
             onBack = { currentPage = SettingsPage.HUB },
             modifier = modifier

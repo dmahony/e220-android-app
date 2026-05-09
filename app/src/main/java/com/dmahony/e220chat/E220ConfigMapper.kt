@@ -51,8 +51,8 @@ internal object E220ConfigMapper {
             cryptH = 0,
             cryptL = 0,
             saveType = 1,
-            addr = 0x0000,
-            dest = 0xFFFF
+            addr = 0x0001,
+            dest = 0x0001
         )
     }
 

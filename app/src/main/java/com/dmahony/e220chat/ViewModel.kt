@@ -675,6 +675,12 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         saveConfig(onError, onSuccess)
     }
 
+    fun restoreDefaultRadioConfig(onError: (String) -> Unit, onSuccess: () -> Unit) {
+        config = E220Config()
+        refreshConfigValidation()
+        saveConfig(onError, onSuccess)
+    }
+
     fun reboot(onError: (String) -> Unit, onSuccess: () -> Unit) {
         viewModelScope.launch {
             try {

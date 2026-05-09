@@ -27,7 +27,7 @@ class E220ProtocolTest {
                 txpower = "30",
                 baud = "9600",
                 addr = "0x0001",
-                dest = "0xFFFF",
+                dest = "0x0001",
                 airrate = "2",
                 subpkt = "0",
                 parity = "0",
@@ -54,10 +54,10 @@ class E220ProtocolTest {
     }
 
     @Test
-    fun `default binary config uses broadcast-safe default address in legacy form`() {
+    fun `default binary config uses shared group address in legacy form`() {
         val legacy = E220ConfigMapper.toLegacy(E220ConfigMapper.defaultBinaryConfig("3C:71:BF:6B:E4:9E"))
 
-        assertEquals("0x0000", legacy.addr)
+        assertEquals("0x0001", legacy.addr)
         assertFalse(validateConfig(legacy).containsKey("addr"))
     }
 
