@@ -1,7 +1,8 @@
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+@file:Suppress("DEPRECATION", "DEPRECATION_ERROR")
 
 plugins {
     id("com.android.application")
+    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.serialization")
     id("org.jetbrains.kotlin.plugin.compose")
 }
@@ -66,10 +67,8 @@ android {
     buildFeatures {
         compose = true
     }
-    kotlin {
-        compilerOptions {
-            jvmTarget.set(JvmTarget.JVM_17)
-        }
+    kotlinOptions {
+        jvmTarget = "17"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

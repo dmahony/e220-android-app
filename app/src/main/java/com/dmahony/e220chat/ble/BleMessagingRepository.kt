@@ -1,16 +1,17 @@
 package com.dmahony.e220chat.ble
 
 import android.content.Context
+import com.dmahony.e220chat.decodeBinaryChatText
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 class BleMessagingRepository(context: Context) {
@@ -18,6 +19,7 @@ class BleMessagingRepository(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val userMap = linkedMapOf<Int, String>()
+    private var currentConfig: BleConfig? = null
 
     private val _messages = MutableSharedFlow<TextPacket>(extraBufferCapacity = 256)
     val messages: SharedFlow<TextPacket> = _messages.asSharedFlow()
@@ -33,14 +35,13 @@ class BleMessagingRepository(context: Context) {
             manager.frames.collect { frame ->
                 when (frame.type) {
                     MsgType.TEXT -> {
-                        if (frame.payload.size >= 3) {
-                            val id = ((frame.payload[0].toInt() and 0xFF) shl 16) or
-                                ((frame.payload[1].toInt() and 0xFF) shl 8) or
-                                (frame.payload[2].toInt() and 0xFF)
-                            val text = frame.payload.copyOfRange(3, frame.payload.size).toString(Charsets.UTF_8)
-                            _messages.emit(TextPacket(id, text))
+                        val parsed = decodeBinaryChatText(frame.payload, currentConfig?.rssiByte == 1)
+                        if (parsed != null) {
+                            _messages.emit(TextPacket(parsed.senderUserId24, parsed.messageId, parsed.text, parsed.rssi))
                         }
                     }
+
+                    MsgType.RECEIPT -> Unit
 
                     MsgType.PROFILE -> {
                         if (frame.payload.size >= 4) {
@@ -51,6 +52,10 @@ class BleMessagingRepository(context: Context) {
                             val name = if (n > 0) frame.payload.copyOfRange(4, 4 + n).toString(Charsets.UTF_8) else "u$id"
                             userMap[id] = name
                         }
+                    }
+
+                    MsgType.CONFIG -> {
+                        runCatching { BleConfig.fromPayload(frame.payload) }.onSuccess { currentConfig = it }
                     }
 
                     else -> Unit
@@ -67,7 +72,7 @@ class BleMessagingRepository(context: Context) {
         manager.dispose()
     }
 
-    suspend fun sendText(toUserId24: Int, message: String) = manager.sendText(toUserId24, message)
+    suspend fun sendText(toUserId24: Int, message: String) = manager.sendText(toUserId24, java.util.concurrent.ThreadLocalRandom.current().nextLong(), message)
 
     suspend fun announceProfile(myUserId24: Int, myName: String) {
         userMap[myUserId24] = myName

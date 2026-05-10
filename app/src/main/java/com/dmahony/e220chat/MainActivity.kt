@@ -194,7 +194,6 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
                 vm = vm,
                 onRefresh = vm::refreshConfig,
                 onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
-                onQuickSave = { vm.quickSave(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                 onRestoreDefaults = { vm.restoreDefaultRadioConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                 onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                 modifier = Modifier.weight(1f)

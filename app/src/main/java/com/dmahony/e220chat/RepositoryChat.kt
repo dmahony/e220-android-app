@@ -34,12 +34,24 @@ internal suspend fun E220Repository.clearChatHistory() {
 internal suspend fun E220Repository.sendMessage(message: String): String {
     if (useBinaryTransport) {
         val destination = parseDestinationUserId()
-        bleV2.sendText(destination, message)
+        val messageId = java.util.concurrent.ThreadLocalRandom.current().nextLong()
+        val senderUserId = binaryConfig?.userId24 ?: destination
+        bleV2.sendText(destination, messageId, message)
         synchronized(binaryChatMessages) {
-            binaryChatMessages.add(ChatMessage(text = message, sent = true, delivered = true))
-            binaryChatSequence = binaryChatMessages.size
+            binaryChatMessages.add(
+                ChatMessage(
+                    text = message,
+                    sent = true,
+                    delivered = false,
+                    senderUserId24 = senderUserId,
+                    messageId = messageId.toULong().toString(16).padStart(16, '0'),
+                    deliveryStatus = DeliveryStatus.SENT
+                )
+            )
+            binaryChatSequence += 1
+            binaryChatReset = true
         }
-        appendTransportLog(TransportDirection.SENT, "TEXT dst=${destination.toString(16).padStart(6, '0')} len=${message.length}")
+        appendTransportLog(TransportDirection.SENT, "TEXT dst=${destination.toString(16).padStart(6, '0')} msg=${messageId.toULong().toString(16).padStart(16, '0')} len=${message.length}")
         return "queued"
     }
     val response = exchange(E220Protocol.buildSendRequest(message))

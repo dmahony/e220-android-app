@@ -24,15 +24,22 @@ internal fun validateConfig(config: E220Config): Map<String, String> {
     validateChoice(errors, "rssi_byte", config.rssiByte, onOffOptions.mapTo(linkedSetOf()) { it.second }, "Choose On or Off")
     validateChoice(errors, "lbt", config.lbt, onOffOptions.mapTo(linkedSetOf()) { it.second }, "Choose On or Off")
     validateChoice(errors, "wor_cycle", config.worCycle, wakeTimeOptions.mapTo(linkedSetOf()) { it.second }, "Select a supported WOR cycle")
+    validateChoice(errors, "wifi_enabled", config.wifiEnabled, setOf("0", "1"), "Choose On or Off")
+    validateChoice(errors, "wifi_mode", config.wifiMode, wifiModeOptions.mapTo(linkedSetOf()) { it.second }, "Select AP, STA, or AP + STA")
 
     validateHex16(errors, "addr", config.addr, allowBroadcast = true)
     validateHex16(errors, "dest", config.dest, allowBroadcast = true)
     validateIntRange(errors, "crypt_h", config.cryptH, 0, 255, "Crypto high must be 0-255")
     validateIntRange(errors, "crypt_l", config.cryptL, 0, 255, "Crypto low must be 0-255")
-    validateIntRange(errors, "lbr_rssi", config.lbrRssi, -128, 5000, "LBT RSSI must be between -128 and 5000")
+    validateIntRange(errors, "lbr_rssi", config.lbrRssi, -128, 0, "LBT RSSI must be between -128 and 0 dBm")
     validateIntRange(errors, "lbr_timeout", config.lbrTimeout, 0, 65535, "LBT timeout must be between 0 and 65535 ms")
     validateIntRange(errors, "urxt", config.urxt, 1, 255, "URXT must be between 1 and 255 byte times")
     validateOptionalInt(errors, "savetype", config.saveType, "Save type must be an integer")
+
+    validateSsid(errors, "wifi_ap_ssid", config.wifiApSsid, "AP SSID")
+    validateSsid(errors, "wifi_sta_ssid", config.wifiStaSsid, "STA SSID")
+    validatePassword(errors, config)
+    validateWifiNetworkRequirements(errors, config)
 
     return errors
 }

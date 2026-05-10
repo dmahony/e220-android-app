@@ -20,6 +20,8 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
 import android.util.Log
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import androidx.core.content.ContextCompat
 import com.dmahony.e220chat.hardenedBleUnsupportedMessage
 import com.dmahony.e220chat.isHardenedBleSupported
@@ -158,16 +160,32 @@ class BleUartManager(context: Context) {
         scope.cancel()
     }
 
-    suspend fun sendText(userId24: Int, text: String): UByte {
+    suspend fun sendText(userId24: Int, messageId: Long, text: String): UByte {
         val textBytes = text.toByteArray(Charsets.UTF_8)
-        val payload = ByteArray(3 + textBytes.size)
-        payload[0] = ((userId24 ushr 16) and 0xFF).toByte()
-        payload[1] = ((userId24 ushr 8) and 0xFF).toByte()
-        payload[2] = (userId24 and 0xFF).toByte()
-        textBytes.copyInto(payload, destinationOffset = 3)
+        val payload = ByteBuffer.allocate(3 + 8 + textBytes.size).order(ByteOrder.BIG_ENDIAN)
+            .put(((userId24 ushr 16) and 0xFF).toByte())
+            .put(((userId24 ushr 8) and 0xFF).toByte())
+            .put((userId24 and 0xFF).toByte())
+            .putLong(messageId)
+            .put(textBytes)
+            .array()
         val seq = allocSeq()
-        Log.d(TAG, "sendText seq=$seq userId=${userId24.toString(16).padStart(6, '0')} len=${textBytes.size} connected=${_connected.value} rxReady=${rxChar != null}")
+        Log.d(TAG, "sendText seq=$seq userId=${userId24.toString(16).padStart(6, '0')} msgId=${messageId.toULong().toString(16).padStart(16, '0')} len=${textBytes.size} connected=${_connected.value} rxReady=${rxChar != null}")
         sendReliable(BleFrame(MsgType.TEXT, seq, payload, requireAck = true))
+        return seq
+    }
+
+    suspend fun sendReceipt(userId24: Int, messageId: Long, receiptKind: ReceiptKind): UByte {
+        val payload = ByteBuffer.allocate(3 + 8 + 1).order(ByteOrder.BIG_ENDIAN)
+            .put(((userId24 ushr 16) and 0xFF).toByte())
+            .put(((userId24 ushr 8) and 0xFF).toByte())
+            .put((userId24 and 0xFF).toByte())
+            .putLong(messageId)
+            .put(receiptKind.code.toByte())
+            .array()
+        val seq = allocSeq()
+        Log.d(TAG, "sendReceipt seq=$seq userId=${userId24.toString(16).padStart(6, '0')} msgId=${messageId.toULong().toString(16).padStart(16, '0')} kind=${receiptKind.name}")
+        sendReliable(BleFrame(MsgType.RECEIPT, seq, payload, requireAck = true))
         return seq
     }
 

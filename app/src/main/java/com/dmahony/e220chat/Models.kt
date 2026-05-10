@@ -32,6 +32,8 @@ enum class FontScale(val label: String, val multiplier: Float) {
 enum class DeliveryStatus {
     SENDING,
     SENT,
+    DELIVERED,
+    READ,
     CONFIRMED,
     FAILED
 }
@@ -56,8 +58,11 @@ data class ChatMessage(
     val delivered: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
     val senderName: String = "",
+    val senderUserId24: Int? = null,
     val messageId: String = java.util.UUID.randomUUID().toString(),
-    val deliveryStatus: DeliveryStatus = if (sent) DeliveryStatus.SENT else DeliveryStatus.CONFIRMED
+    val read: Boolean = false,
+    val deliveryStatus: DeliveryStatus = if (sent) DeliveryStatus.SENT else DeliveryStatus.CONFIRMED,
+    val rssi: Int? = null
 )
 
 @Serializable
@@ -69,7 +74,7 @@ data class ChatSnapshot(
 
 @Serializable
 data class E220Config(
-    val freq: String = "868.125",
+    val freq: String = "930.125",
     val txpower: String = "21",
     val baud: String = "9600",
     val addr: String = "0x0001",
@@ -79,9 +84,9 @@ data class E220Config(
     val parity: String = "0",
     val txmode: String = "0",
     @SerialName("rssi_noise")
-    val rssiNoise: String = "0",
+    val rssiNoise: String = "1",
     @SerialName("rssi_byte")
-    val rssiByte: String = "0",
+    val rssiByte: String = "1",
     val lbt: String = "0",
     @SerialName("lbr_rssi")
     val lbrRssi: String = "-55",

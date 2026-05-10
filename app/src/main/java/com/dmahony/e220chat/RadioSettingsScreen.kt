@@ -23,7 +23,6 @@ internal fun RadioSettingsScreen(
     vm: E220ChatViewModel,
     onRefresh: () -> Unit,
     onSave: () -> Unit,
-    onQuickSave: () -> Unit,
     onRestoreDefaults: () -> Unit,
     onReboot: () -> Unit,
     modifier: Modifier = Modifier,
@@ -249,17 +248,6 @@ internal fun RadioSettingsScreen(
                         keyboardType = KeyboardType.Number
                     ) { vm.setConfigField("lbr_timeout", it) }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    ConfigField(
-                        label = "Save type",
-                        value = vm.config.saveType,
-                        supportingText = "App-specific save mode. Keep the device default unless you know the firmware behavior.",
-                        errorText = vm.configFieldErrors["savetype"],
-                        modifier = Modifier.weight(1f),
-                        keyboardType = KeyboardType.Number
-                    ) { vm.setConfigField("savetype", it) }
-                    Spacer(modifier = Modifier.weight(1f))
-                }
             }
 
             // ---- Action buttons ----
@@ -269,9 +257,7 @@ internal fun RadioSettingsScreen(
                     Spacer(Modifier.width(8.dp))
                     Text("Refresh")
                 }
-                FilledTonalButton(onClick = onQuickSave, modifier = Modifier.weight(1f)) {
-                    Text("Quick save")
-                }
+                Spacer(modifier = Modifier.weight(1f))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 FilledTonalButton(onClick = onRestoreDefaults, modifier = Modifier.weight(1f)) {

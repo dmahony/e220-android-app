@@ -11,7 +11,8 @@ import kotlinx.coroutines.launch
 data class ChatLine(
     val fromUserId24: Int,
     val fromName: String,
-    val text: String
+    val text: String,
+    val rssi: Int? = null
 )
 
 class BleChatViewModel(application: Application) : AndroidViewModel(application) {
@@ -28,7 +29,8 @@ class BleChatViewModel(application: Application) : AndroidViewModel(application)
                 _lines.value = _lines.value + ChatLine(
                     fromUserId24 = pkt.userId24,
                     fromName = repo.usernameFor(pkt.userId24),
-                    text = pkt.text
+                    text = pkt.text,
+                    rssi = pkt.rssi
                 )
             }
         }

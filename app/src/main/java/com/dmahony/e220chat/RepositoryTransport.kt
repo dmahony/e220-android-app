@@ -14,6 +14,7 @@ import androidx.core.content.ContextCompat
 import com.dmahony.e220chat.ble.BleConfig
 import com.dmahony.e220chat.ble.BleFrame
 import com.dmahony.e220chat.ble.MsgType
+import com.dmahony.e220chat.ble.ReceiptKind
 import com.dmahony.e220chat.ble.StatusTelemetry
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -404,44 +405,210 @@ internal fun E220Repository.parseDestinationUserId(): Int {
         return binaryConfig?.dest ?: 0x0001
     }
 
-internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {
-        when (frame.type) {
-            MsgType.TEXT -> {
-                if (frame.payload.size >= 3) {
-                    val userId = ((frame.payload[0].toInt() and 0xFF) shl 16) or
-                        ((frame.payload[1].toInt() and 0xFF) shl 8) or
-                        (frame.payload[2].toInt() and 0xFF)
-                    val text = frame.payload.copyOfRange(3, frame.payload.size).toString(Charsets.UTF_8)
-                    synchronized(binaryChatMessages) {
-                        binaryChatMessages.add(ChatMessage(text = "[RX ${userId.toString(16).padStart(6, '0')}] $text", sent = false, delivered = true))
-                        binaryChatSequence = binaryChatMessages.size
-                    }
-                    appendTransportLog(TransportDirection.RECEIVED, "TEXT src=${userId.toString(16).padStart(6, '0')} len=${text.length}")
+internal data class BinaryChatText(
+    val senderUserId24: Int,
+    val messageId: Long,
+    val text: String,
+    val rssi: Int? = null
+)
+
+internal data class BinaryChatReceipt(
+    val targetUserId24: Int,
+    val messageId: Long,
+    val kind: ReceiptKind
+)
+
+internal fun decodeBinaryChatText(payload: ByteArray, rssiEnabled: Boolean): BinaryChatText? {
+    if (payload.size < 11) return null
+    val senderUserId = ((payload[0].toInt() and 0xFF) shl 16) or
+        ((payload[1].toInt() and 0xFF) shl 8) or
+        (payload[2].toInt() and 0xFF)
+    val messageId = java.nio.ByteBuffer.wrap(payload, 3, 8)
+        .order(java.nio.ByteOrder.BIG_ENDIAN)
+        .long
+    val textStart = 11
+    val textEnd = if (rssiEnabled && payload.size > textStart) payload.size - 1 else payload.size
+    if (textEnd < textStart) return null
+    val textBytes = payload.copyOfRange(textStart, textEnd)
+    val text = textBytes.toString(Charsets.UTF_8)
+    val rssi = if (rssiEnabled && payload.size > textStart) payload.last().toInt().toByte().toInt() else null
+    return BinaryChatText(senderUserId24 = senderUserId, messageId = messageId, text = text, rssi = rssi)
+}
+
+internal fun decodeBinaryChatReceipt(payload: ByteArray): BinaryChatReceipt? {
+    if (payload.size < 12) return null
+    val targetUserId = ((payload[0].toInt() and 0xFF) shl 16) or
+        ((payload[1].toInt() and 0xFF) shl 8) or
+        (payload[2].toInt() and 0xFF)
+    val messageId = java.nio.ByteBuffer.wrap(payload, 3, 8)
+        .order(java.nio.ByteOrder.BIG_ENDIAN)
+        .long
+    val kind = ReceiptKind.from((payload[11].toInt() and 0xFF).toUByte()) ?: return null
+    return BinaryChatReceipt(targetUserId24 = targetUserId, messageId = messageId, kind = kind)
+}
+
+private fun Long.formatBinaryMessageId(): String = java.lang.Long.toUnsignedString(this, 16).padStart(16, '0')
+
+private fun E220Repository.markBinaryChatDirty() {
+    synchronized(binaryChatMessages) {
+        binaryChatSequence += 1
+        binaryChatReset = true
+    }
+}
+
+private fun E220Repository.upsertBinaryMessage(messageId: String, updater: (ChatMessage?) -> ChatMessage): ChatMessage {
+    synchronized(binaryChatMessages) {
+        val index = binaryChatMessages.indexOfFirst { it.messageId == messageId }
+        val current = if (index >= 0) binaryChatMessages[index] else null
+        val updated = updater(current)
+        if (index >= 0) {
+            binaryChatMessages[index] = updated
+        } else {
+            binaryChatMessages.add(updated)
+        }
+        binaryChatSequence += 1
+        binaryChatReset = true
+        return updated
+    }
+}
+
+internal suspend fun E220Repository.markBinaryMessagesRead(visible: Boolean) {
+    if (!useBinaryTransport || !visible) return
+    val myUserId = binaryConfig?.userId24 ?: return
+    val unread = synchronized(binaryChatMessages) {
+        binaryChatMessages.filter { !it.sent && !it.read && it.deliveryStatus == DeliveryStatus.DELIVERED }
+    }
+    for (message in unread) {
+        val targetUserId = message.senderUserId24 ?: myUserId
+        runCatching { bleV2.sendReceipt(targetUserId, message.messageId.toLongUnsignedHex(), ReceiptKind.READ) }
+    }
+    if (unread.isNotEmpty()) {
+        synchronized(binaryChatMessages) {
+            unread.forEach { target ->
+                val idx = binaryChatMessages.indexOfFirst { it.messageId == target.messageId }
+                if (idx >= 0) {
+                    binaryChatMessages[idx] = binaryChatMessages[idx].copy(read = true, deliveryStatus = DeliveryStatus.READ)
                 }
             }
-            MsgType.PROFILE -> {
-                appendTransportLog(TransportDirection.RECEIVED, "PROFILE len=${frame.payload.size}")
-            }
-            MsgType.CONFIG -> {
-                runCatching { BleConfig.fromPayload(frame.payload) }.onSuccess { cfg ->
-                    binaryConfig = cfg
-                    appendTransportLog(TransportDirection.RECEIVED, "CONFIG ackTimeout=${cfg.ackTimeoutMs} retries=${cfg.maxRetries}")
-                }
-            }
-            MsgType.ERROR -> {
-                val code = frame.payload.getOrNull(0)?.toInt()?.and(0xFF) ?: -1
-                val origin = frame.payload.getOrNull(1)?.toInt()?.and(0xFF) ?: -1
-                appendTransportLog(TransportDirection.INFO, "BLE error code=$code originType=$origin")
-            }
-            MsgType.STATUS -> {
-                runCatching { StatusTelemetry.fromPayload(frame.payload) }.onSuccess { st ->
-                    binaryStatus = st
-                    android.util.Log.d("E220Status", "flow=${st.flowState} rssi=${st.lastRssi} qBRx=${st.qBleRx} qRTx=${st.qRadioTx} qRRx=${st.qRadioRx} qBTx=${st.qBleTx} devId=${st.deviceId24.toString(16)}")
-                }
-            }
-            MsgType.ACK, MsgType.WHOIS -> Unit
+            binaryChatSequence += 1
+            binaryChatReset = true
         }
     }
+}
+
+private fun String.toLongUnsignedHex(): Long = java.lang.Long.parseUnsignedLong(this, 16)
+
+internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {
+    when (frame.type) {
+        MsgType.TEXT -> {
+            val parsed = decodeBinaryChatText(frame.payload, binaryConfig?.rssiByte == 1) ?: return
+            val myUserId = binaryConfig?.userId24
+            val isMine = myUserId != null && parsed.senderUserId24 == myUserId
+            val messageId = parsed.messageId.formatBinaryMessageId()
+            val displayText = if (isMine) parsed.text else "[RX ${parsed.senderUserId24.toString(16).padStart(6, '0')}] ${parsed.text}"
+            val senderName = if (isMine) {
+                binaryConfig?.username.orEmpty()
+            } else {
+                "u${parsed.senderUserId24.toString(16).padStart(6, '0')}"
+            }
+            upsertBinaryMessage(messageId) { current ->
+                if (current != null) {
+                    val existing = current
+                    existing.copy(
+                        text = existing.text.ifBlank { displayText },
+                        sent = isMine || existing.sent,
+                        delivered = existing.delivered || !isMine,
+                        senderName = senderName,
+                        senderUserId24 = parsed.senderUserId24,
+                        read = existing.read,
+                        messageId = messageId,
+                        deliveryStatus = when {
+                            existing.deliveryStatus == DeliveryStatus.READ -> DeliveryStatus.READ
+                            isMine -> existing.deliveryStatus
+                            else -> DeliveryStatus.DELIVERED
+                        },
+                        rssi = parsed.rssi ?: existing.rssi
+                    )
+                } else {
+                    ChatMessage(
+                        text = displayText,
+                        sent = isMine,
+                        delivered = isMine,
+                        senderName = senderName,
+                        senderUserId24 = parsed.senderUserId24,
+                        read = false,
+                        messageId = messageId,
+                        deliveryStatus = if (isMine) DeliveryStatus.SENT else DeliveryStatus.DELIVERED,
+                        rssi = parsed.rssi
+                    )
+                }
+            }
+            appendTransportLog(
+                TransportDirection.RECEIVED,
+                "TEXT src=${parsed.senderUserId24.toString(16).padStart(6, '0')} msg=${messageId} len=${parsed.text.length}${parsed.rssi?.let { " rssi=$it" } ?: ""}"
+            )
+            if (!isMine) {
+                recoveryScope.launch {
+                    runCatching { bleV2.sendReceipt(parsed.senderUserId24, parsed.messageId, ReceiptKind.DELIVERED) }
+                }
+            }
+        }
+
+        MsgType.RECEIPT -> {
+            val parsed = decodeBinaryChatReceipt(frame.payload) ?: return
+            val myUserId = binaryConfig?.userId24 ?: return
+            if (parsed.targetUserId24 != myUserId) return
+            val messageId = parsed.messageId.formatBinaryMessageId()
+            val newStatus = when (parsed.kind) {
+                ReceiptKind.DELIVERED -> DeliveryStatus.DELIVERED
+                ReceiptKind.READ -> DeliveryStatus.READ
+            }
+            synchronized(binaryChatMessages) {
+                val idx = binaryChatMessages.indexOfFirst { it.messageId == messageId }
+                if (idx >= 0) {
+                    val existing = binaryChatMessages[idx]
+                    binaryChatMessages[idx] = existing.copy(
+                        delivered = existing.delivered || parsed.kind == ReceiptKind.DELIVERED,
+                        read = existing.read || parsed.kind == ReceiptKind.READ,
+                        deliveryStatus = newStatus
+                    )
+                    binaryChatSequence += 1
+                    binaryChatReset = true
+                }
+            }
+            appendTransportLog(
+                TransportDirection.RECEIVED,
+                "RECEIPT target=${parsed.targetUserId24.toString(16).padStart(6, '0')} msg=$messageId kind=${parsed.kind.name}"
+            )
+        }
+
+        MsgType.PROFILE -> {
+            appendTransportLog(TransportDirection.RECEIVED, "PROFILE len=${frame.payload.size}")
+        }
+
+        MsgType.CONFIG -> {
+            runCatching { BleConfig.fromPayload(frame.payload) }.onSuccess { cfg ->
+                binaryConfig = cfg
+                appendTransportLog(TransportDirection.RECEIVED, "CONFIG ackTimeout=${cfg.ackTimeoutMs} retries=${cfg.maxRetries}")
+            }
+        }
+
+        MsgType.ERROR -> {
+            val code = frame.payload.getOrNull(0)?.toInt()?.and(0xFF) ?: -1
+            val origin = frame.payload.getOrNull(1)?.toInt()?.and(0xFF) ?: -1
+            appendTransportLog(TransportDirection.INFO, "BLE error code=$code originType=$origin")
+        }
+
+        MsgType.STATUS -> {
+            runCatching { StatusTelemetry.fromPayload(frame.payload) }.onSuccess { st ->
+                binaryStatus = st
+                android.util.Log.d("E220Status", "flow=${st.flowState} rssi=${st.lastRssi} qBRx=${st.qBleRx} qRTx=${st.qRadioTx} qRRx=${st.qRadioRx} qBTx=${st.qBleTx} devId=${st.deviceId24.toString(16)}")
+            }
+        }
+
+        MsgType.ACK, MsgType.WHOIS -> Unit
+    }
+}
 
 internal fun E220Repository.handleIncomingChunk(chunk: String) {
         val completeLine: String? = synchronized(stateLock) {

@@ -131,6 +131,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     fun setTab(tab: AppTab) {
         selectedTab = tab
+        syncBinaryReadReceipts()
     }
 
     fun toggleTheme() {
@@ -161,6 +162,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         }
         isInForeground = foreground
         repo.isInForeground = foreground
+        syncBinaryReadReceipts()
     }
 
     fun refreshBluetoothDevices(autoConnectSavedDevice: Boolean = false) {
@@ -536,7 +538,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun applyChatSnapshot(snapshot: ChatSnapshot) {
-        val previousCount = chatMessages.size
+        val previousMessages = chatMessages
+        val previousCount = previousMessages.size
         if (snapshot.reset || lastChatSequence < 0 || snapshot.sequence < lastChatSequence) {
             chatMessages = snapshot.messages
         } else if (snapshot.sequence > lastChatSequence) {
@@ -547,12 +550,29 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             }
         }
         lastChatSequence = snapshot.sequence
-        // Trigger haptic for new incoming messages when app is not in foreground or not viewing chat
-        val newMessageCount = chatMessages.size - previousCount
-        if (newMessageCount > 0) {
-            val hasIncoming = snapshot.messages.any { !it.sent }
+        val newMessages = if (snapshot.messages.size > previousCount) {
+            snapshot.messages.takeLast(snapshot.messages.size - previousCount)
+        } else {
+            emptyList()
+        }
+        if (newMessages.isNotEmpty()) {
+            val hasIncoming = newMessages.any { !it.sent }
             if (hasIncoming && !isInForeground || hasIncoming && selectedTab != AppTab.CHAT) {
+                val senderName = selectedBluetoothName.ifBlank { "Radio" }
+                notificationManager.showMessageNotifications(newMessages, senderName)
                 onHapticRequest?.invoke()
+            }
+        }
+        syncBinaryReadReceipts()
+    }
+
+    private fun isBinaryChatVisible(): Boolean = isInForeground && selectedTab == AppTab.CHAT
+
+    private fun syncBinaryReadReceipts() {
+        if (!isBinaryChatVisible()) return
+        viewModelScope.launch {
+            runCatching {
+                repo.markBinaryMessagesRead(true)
             }
         }
     }
@@ -669,10 +689,6 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                 onError(msg)
             }
         }
-    }
-
-    fun quickSave(onError: (String) -> Unit, onSuccess: () -> Unit) {
-        saveConfig(onError, onSuccess)
     }
 
     fun restoreDefaultRadioConfig(onError: (String) -> Unit, onSuccess: () -> Unit) {

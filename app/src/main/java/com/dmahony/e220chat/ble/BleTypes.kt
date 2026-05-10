@@ -13,7 +13,8 @@ enum class MsgType(val code: UByte) {
     CONFIG(0x04u),
     PROFILE(0x05u),
     ERROR(0x06u),
-    WHOIS(0x07u);
+    WHOIS(0x07u),
+    RECEIPT(0x09u);
 
     companion object {
         fun from(code: UByte): MsgType? = entries.firstOrNull { it.code == code }
@@ -32,6 +33,15 @@ enum class FlowState(val code: UByte) {
     }
 }
 
+enum class ReceiptKind(val code: UByte) {
+    DELIVERED(1u),
+    READ(2u);
+
+    companion object {
+        fun from(code: UByte): ReceiptKind? = entries.firstOrNull { it.code == code }
+    }
+}
+
 data class BleFrame(
     val type: MsgType,
     val seq: UByte,
@@ -47,7 +57,7 @@ data class BleConfig(
     val profileIntervalSec: Int = 900,
     val userId24: Int,
     val username: String,
-    val channel: Int = 0,
+    val channel: Int = 80,
     val txpower: Int = 0,
     val baud: Int = 0,
     val parity: Int = 0,
@@ -55,8 +65,8 @@ data class BleConfig(
     val txmode: Int = 0,
     val lbt: Int = 0,
     val subpkt: Int = 0,
-    val rssiNoise: Int = 0,
-    val rssiByte: Int = 0,
+    val rssiNoise: Int = 1,
+    val rssiByte: Int = 1,
     val urxt: Int = 0,
     val worCycle: Int = 0,
     val cryptH: Int = 0,
@@ -305,4 +315,4 @@ data class StatusTelemetry(
 
 data class ProfilePacket(val userId24: Int, val username: String)
 
-data class TextPacket(val userId24: Int, val text: String)
+data class TextPacket(val userId24: Int, val messageId: Long, val text: String, val rssi: Int? = null)

@@ -54,10 +54,21 @@ class E220ProtocolTest {
     }
 
     @Test
-    fun `default binary config uses shared group address in legacy form`() {
+    fun `default radio config starts on channel 80 with RSSI helpers enabled`() {
+        val defaults = E220Config()
+        assertEquals("930.125", defaults.freq)
+        assertEquals("1", defaults.rssiNoise)
+        assertEquals("1", defaults.rssiByte)
+    }
+
+    @Test
+    fun `default binary config uses shared group address and channel 80 in legacy form`() {
         val legacy = E220ConfigMapper.toLegacy(E220ConfigMapper.defaultBinaryConfig("3C:71:BF:6B:E4:9E"))
 
+        assertEquals("930.125", legacy.freq)
         assertEquals("0x0001", legacy.addr)
+        assertEquals("1", legacy.rssiNoise)
+        assertEquals("1", legacy.rssiByte)
         assertFalse(validateConfig(legacy).containsKey("addr"))
     }
 

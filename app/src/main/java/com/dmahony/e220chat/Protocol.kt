@@ -99,7 +99,7 @@ object E220Protocol {
     fun parseConfigResponse(response: JsonObject): E220Config {
         val data = requireData(response)
         return E220Config(
-            freq = data.optDouble("freq", 868.125).toString(),
+            freq = data.optDouble("freq", 930.125).toString(),
             txpower = data.optInt("txpower", 21).toString(),
             baud = data.optInt("baud", 9600).toString(),
             addr = data.optString("addr", "0x0001"),
@@ -108,8 +108,8 @@ object E220Protocol {
             subpkt = data.optInt("subpkt", 0).toString(),
             parity = data.optInt("parity", 0).toString(),
             txmode = data.optInt("txmode", 0).toString(),
-            rssiNoise = data.optInt("rssi_noise", 0).toString(),
-            rssiByte = data.optInt("rssi_byte", 0).toString(),
+            rssiNoise = data.optInt("rssi_noise", 1).toString(),
+            rssiByte = data.optInt("rssi_byte", 1).toString(),
             lbt = data.optInt("lbt", 0).toString(),
             lbrRssi = data.optInt("lbr_rssi", -55).toString(),
             lbrTimeout = data.optInt("lbr_timeout", 2000).toString(),
@@ -257,7 +257,7 @@ object E220Protocol {
     }
 
     private fun E220Config.toJson(): JsonObject = buildJsonObject {
-        put("freq", JsonPrimitive(freq.toDoubleOrNull() ?: 868.125))
+        put("freq", JsonPrimitive(freq.toDoubleOrNull() ?: 930.125))
         put("txpower", JsonPrimitive(txpower.toIntOrNull() ?: 21))
         put("baud", JsonPrimitive(baud.toIntOrNull() ?: 9600))
         put("addr", JsonPrimitive(addr))
@@ -266,8 +266,8 @@ object E220Protocol {
         put("subpkt", JsonPrimitive(subpkt.toIntOrNull() ?: 0))
         put("parity", JsonPrimitive(parity.toIntOrNull() ?: 0))
         put("txmode", JsonPrimitive(txmode.toIntOrNull() ?: 0))
-        put("rssi_noise", JsonPrimitive(rssiNoise.toIntOrNull() ?: 0))
-        put("rssi_byte", JsonPrimitive(rssiByte.toIntOrNull() ?: 0))
+        put("rssi_noise", JsonPrimitive(rssiNoise.toIntOrNull() ?: 1))
+        put("rssi_byte", JsonPrimitive(rssiByte.toIntOrNull() ?: 1))
         put("lbt", JsonPrimitive(lbt.toIntOrNull() ?: 0))
         put("lbr_rssi", JsonPrimitive(lbrRssi.toIntOrNull() ?: -55))
         put("lbr_timeout", JsonPrimitive(lbrTimeout.toIntOrNull() ?: 2000))

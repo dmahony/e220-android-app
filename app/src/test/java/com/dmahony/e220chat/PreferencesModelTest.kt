@@ -57,8 +57,8 @@ class PreferencesModelTest {
     }
 
     @Test
-    fun `DeliveryStatus has four values`() {
-        assertEquals(4, DeliveryStatus.values().size)
+    fun `DeliveryStatus has six values`() {
+        assertEquals(6, DeliveryStatus.values().size)
     }
 
     @Test

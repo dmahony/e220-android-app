@@ -354,26 +354,11 @@ internal fun CompactConnectionBanner(
     onOpenBluetooth: () -> Unit,
     onReconnectBluetooth: () -> Unit
 ) {
-    val transition = rememberInfiniteTransition(label = "linkGlow")
-    val glowPulse by transition.animateFloat(
-        initialValue = 0.35f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glowPulse"
-    )
-    val glowColor = if (connected) Color(0xFF2BFF88) else Color(0xFFFF5A5A)
-    val glowText = if (connected) "LINK UP" else "LINK DOWN"
-    val glowStyle = MaterialTheme.typography.labelMedium.copy(
-        color = glowColor,
-        shadow = androidx.compose.ui.graphics.Shadow(
-            color = glowColor.copy(alpha = 0.90f * glowPulse),
-            offset = Offset.Zero,
-            blurRadius = 10f * glowPulse + 2f
-        )
-    )
+    val linkColor = if (connected) Color(0xFF2BFF88) else Color(0xFFFF5A5A)
+    val linkText = if (connected) "LINK UP" else "LINK DOWN"
+    val linkBackground = linkColor.copy(alpha = 0.15f)
+    val linkBorder = linkColor.copy(alpha = 0.3f)
+    val linkStyle = MaterialTheme.typography.labelSmall.copy(color = linkColor)
 
     Surface(
         modifier = Modifier
@@ -390,49 +375,48 @@ internal fun CompactConnectionBanner(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = RoundedCornerShape(999.dp),
-                color = if (connected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.88f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.75f),
-                border = BorderStroke(
-                    1.dp,
-                    if (connected) MaterialTheme.colorScheme.primary.copy(alpha = 0.24f) else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.16f)
-                )
-            ) {
-                Text(
-                    text = glowText,
-                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                    style = glowStyle
-                )
-            }
-            if (connected && lastRssi != 0) {
-                val quality = E220ChatViewModel.getStaticRssiQuality(lastRssi)
-                val qualityColor = when (E220ChatViewModel.getStaticRssiQualityColor(lastRssi)) {
-                    "green" -> Color(0xFF2BFF88)
-                    "yellow-green" -> Color(0xFFA8E600)
-                    "yellow" -> Color(0xFFFFCC00)
-                    "red" -> Color(0xFFFF5A5A)
-                    else -> Color(0xFF888888)
-                }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Surface(
                     shape = RoundedCornerShape(999.dp),
-                    color = qualityColor.copy(alpha = 0.15f),
-                    border = BorderStroke(1.dp, qualityColor.copy(alpha = 0.3f))
+                    color = linkBackground,
+                    border = BorderStroke(1.dp, linkBorder)
                 ) {
-                    Row(
+                    Text(
+                        text = linkText,
                         modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(3.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        style = linkStyle
+                    )
+                }
+                if (connected && lastRssi != 0) {
+                    val quality = E220ChatViewModel.getStaticRssiQuality(lastRssi)
+                    val qualityColor = when (E220ChatViewModel.getStaticRssiQualityColor(lastRssi)) {
+                        "green" -> Color(0xFF2BFF88)
+                        "yellow-green" -> Color(0xFFA8E600)
+                        "yellow" -> Color(0xFFFFCC00)
+                        "red" -> Color(0xFFFF5A5A)
+                        else -> Color(0xFF888888)
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(999.dp),
+                        color = qualityColor.copy(alpha = 0.15f),
+                        border = BorderStroke(1.dp, qualityColor.copy(alpha = 0.3f))
                     ) {
-                        Text(
-                            text = "$lastRssi dBm",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = qualityColor
-                        )
-                        Text(
-                            text = quality,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = qualityColor.copy(alpha = 0.8f)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "$lastRssi dBm",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = qualityColor
+                            )
+                            Text(
+                                text = quality,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = qualityColor.copy(alpha = 0.8f)
+                            )
+                        }
                     }
                 }
             }
@@ -654,8 +638,11 @@ internal fun MessageBubble(message: ChatMessage) {
             ) {
                 Column(
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    if (!message.sent && message.rssi != null) {
+                        MessageRssiBadge(message.rssi)
+                    }
                     ClickableText(
                         text = annotatedText,
                         style = bodyStyle,
@@ -675,16 +662,53 @@ internal fun MessageBubble(message: ChatMessage) {
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                         )
                         if (message.sent) {
+                            val statusText = when (message.deliveryStatus) {
+                                DeliveryStatus.READ -> "✓✓ Seen"
+                                DeliveryStatus.DELIVERED -> "✓✓ Delivered"
+                                DeliveryStatus.SENT, DeliveryStatus.SENDING, DeliveryStatus.CONFIRMED -> "✓ Sent"
+                                DeliveryStatus.FAILED -> "! Failed"
+                            }
+                            val statusColor = when (message.deliveryStatus) {
+                                DeliveryStatus.READ -> MaterialTheme.colorScheme.primary
+                                DeliveryStatus.DELIVERED -> MaterialTheme.colorScheme.onSurfaceVariant
+                                DeliveryStatus.SENT, DeliveryStatus.SENDING, DeliveryStatus.CONFIRMED -> MaterialTheme.colorScheme.onSurfaceVariant
+                                DeliveryStatus.FAILED -> MaterialTheme.colorScheme.error
+                            }
                             Text(
-                                text = "✓",
+                                text = statusText,
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = statusColor
                             )
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun MessageRssiBadge(rssi: Int) {
+    val qualityColor = when (E220ChatViewModel.getStaticRssiQualityColor(rssi)) {
+        "green" -> Color(0xFF2BFF88)
+        "yellow-green" -> Color(0xFFA8E600)
+        "yellow" -> Color(0xFFFFCC00)
+        "red" -> Color(0xFFFF5A5A)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = qualityColor.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, qualityColor.copy(alpha = 0.30f))
+    ) {
+        Text(
+            text = "$rssi dBm",
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 1.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = qualityColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

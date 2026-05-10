@@ -34,7 +34,6 @@ internal fun SettingsScreen(
     vm: E220ChatViewModel,
     onRefresh: () -> Unit,
     onSave: () -> Unit,
-    onQuickSave: () -> Unit,
     onRestoreDefaults: () -> Unit,
     onReboot: () -> Unit,
     modifier: Modifier = Modifier
@@ -54,12 +53,11 @@ internal fun SettingsScreen(
             vm = vm,
             onRefresh = onRefresh,
             onSave = onSave,
-            onQuickSave = onQuickSave,
             onRestoreDefaults = onRestoreDefaults,
             onReboot = onReboot,
-            onBack = { currentPage = SettingsPage.HUB },
             modifier = modifier
         )
+
         SettingsPage.WIFI -> WifiScreen(
             vm = vm,
             onBack = { currentPage = SettingsPage.HUB },
@@ -175,14 +173,6 @@ private fun SettingsHub(
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             FilledTonalButton(onClick = onNavigateToRadio, modifier = Modifier.weight(1f)) {
                 Text("Radio config")
-            }
-            Button(onClick = {
-                vm.quickSave(
-                    onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() },
-                    onSuccess = { Toast.makeText(context, "Quick save applied", Toast.LENGTH_SHORT).show() }
-                )
-            }, modifier = Modifier.weight(1f)) {
-                Text("Quick save")
             }
         }
     }

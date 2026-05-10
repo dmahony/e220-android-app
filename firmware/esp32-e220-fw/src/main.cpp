@@ -34,7 +34,8 @@ enum MsgType : uint8_t {
   MSG_PROFILE = 0x05,
   MSG_ERROR   = 0x06,
   MSG_WHOIS   = 0x07,
-  MSG_AUTH    = 0x08
+  MSG_AUTH    = 0x08,
+  MSG_RECEIPT = 0x09
 };
 
 enum FlowState : uint8_t {
@@ -70,8 +71,8 @@ struct Config {
   uint8_t txmode = 0;
   uint8_t lbt = 0;
   uint8_t subpkt = 0;
-  uint8_t rssiNoise = 0;
-  uint8_t rssiByte = 0;
+  uint8_t rssiNoise = 1;
+  uint8_t rssiByte = 1;
   uint8_t urxt = 0;
   uint8_t worCycle = 3;
   uint8_t cryptH = 0;
@@ -226,6 +227,7 @@ struct StreamParser {
 };
 StreamParser gBleParser;
 StreamParser gRadioParser;
+bool gAwaitingRadioRssi = false;
 
 // ========================= Utilities =========================
 
@@ -991,21 +993,20 @@ void handlePendingAckTimeout() {
   notifyChunked(gTxChar, raw, n);
 }
 
-void queueRadioTextFromBle(const Frame &in) {
-  // TEXT payload app->esp: [dstId:3][utf8...]
+void queueRadioPayloadFromBle(const Frame &in) {
   if (in.len < 4) {
-    enqueueError(0x10, MSG_TEXT, "TEXT_PAYLOAD_TOO_SHORT");
+    enqueueError(0x10, in.type, "PAYLOAD_TOO_SHORT");
     return;
   }
   Frame out{};
-  out.type = MSG_TEXT;
+  out.type = in.type;
   out.seq = in.seq;
   out.len = in.len;
   memcpy(out.payload, in.payload, in.len);
   out.requireAck = false;
 
   if (!gRadioTxQueue.push(out)) {
-    enqueueError(0x11, MSG_TEXT, "RADIO_TX_QUEUE_FULL");
+    enqueueError(0x11, in.type, "RADIO_TX_QUEUE_FULL");
     updateFlowState(FLOW_BUSY);
     pushStatusFrame(true);
     return;
@@ -1034,7 +1035,11 @@ void processBleRxQueue() {
       }
 
       case MSG_TEXT:
-        queueRadioTextFromBle(in);
+        queueRadioPayloadFromBle(in);
+        break;
+
+      case MSG_RECEIPT:
+        queueRadioPayloadFromBle(in);
         break;
 
       case MSG_CONFIG:
@@ -1087,8 +1092,20 @@ void pumpRadioRxBytes() {
   Frame f{};
   while (E220.available()) {
     uint8_t b = (uint8_t)E220.read();
+
+    if (gAwaitingRadioRssi) {
+      gLastRssi = (int8_t)b;
+      gAwaitingRadioRssi = false;
+      Serial.printf("[DBG] Radio RX RSSI=%d dBm\n", (int)gLastRssi);
+      pushStatusFrame(false);
+      continue;
+    }
+
     if (decodeByte(gRadioParser, b, f)) {
       Serial.printf("[DBG] Radio RX decoded type=%02X seq=%u len=%u\n", f.type, f.seq, f.len);
+      if (gCfg.rssiByte) {
+        gAwaitingRadioRssi = true;
+      }
       if (!gRadioRxQueue.push(f)) {
         enqueueError(0x30, f.type, "RADIO_RX_QUEUE_FULL");
       } else {
@@ -1102,13 +1119,19 @@ void processRadioRxQueue() {
   Frame in{};
   while (gRadioRxQueue.pop(in)) {
     Serial.printf("[DBG] Radio RX forwarding type=%02X seq=%u len=%u\n", in.type, in.seq, in.len);
-    if (in.type == MSG_TEXT || in.type == MSG_PROFILE) {
+    if (in.type == MSG_TEXT || in.type == MSG_PROFILE || in.type == MSG_RECEIPT) {
       Frame out{};
       out.type = in.type;
       out.seq = allocSeq();
-      out.len = in.len;
-      memcpy(out.payload, in.payload, in.len);
       out.requireAck = true;
+      if (in.type == MSG_TEXT && gCfg.rssiByte && in.len < sizeof(out.payload)) {
+        out.len = in.len + 1;
+        memcpy(out.payload, in.payload, in.len);
+        out.payload[in.len] = (uint8_t)gLastRssi;
+      } else {
+        out.len = in.len;
+        memcpy(out.payload, in.payload, in.len);
+      }
       if (!gBleTxQueue.push(out)) enqueueError(0x31, in.type, "BLE_TX_QUEUE_FULL");
     }
   }
@@ -1152,9 +1175,28 @@ void setup() {
 
   analogReadResolution(12);
   setupRadio();
-  Serial.println("[E220] Configuring radio with firmware defaults...");
+  Serial.println("[E220] Restoring radio defaults and saving to module flash...");
+  gCfg.channel = 80;
+  gCfg.txpower = 21;
+  gCfg.baud = E220_UART_BAUD;
+  gCfg.parity = 0;
+  gCfg.airrate = 2;
+  gCfg.txmode = 0;
+  gCfg.lbt = 0;
+  gCfg.subpkt = 0;
+  gCfg.rssiNoise = 1;
+  gCfg.rssiByte = 1;
+  gCfg.urxt = 0;
+  gCfg.worCycle = 3;
+  gCfg.cryptH = 0;
+  gCfg.cryptL = 0;
+  gCfg.saveType = 0;
+  gCfg.addr = 0x0001;
+  gCfg.dest = 0x0001;
   if (!writeE220Config()) {
     Serial.println("[E220] WARNING: Failed to write E220 config - radio may be misconfigured");
+  } else {
+    refreshE220RadioConfig(false);
   }
   setupBle();
 
