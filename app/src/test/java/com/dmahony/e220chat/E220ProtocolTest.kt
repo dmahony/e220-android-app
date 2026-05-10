@@ -1,5 +1,6 @@
 package com.dmahony.e220chat
 
+import com.dmahony.e220chat.ble.BleConfig
 import kotlinx.serialization.json.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -59,6 +60,7 @@ class E220ProtocolTest {
         assertEquals("930.125", defaults.freq)
         assertEquals("1", defaults.rssiNoise)
         assertEquals("1", defaults.rssiByte)
+        assertEquals("-85", defaults.lbrRssi)
     }
 
     @Test
@@ -69,7 +71,22 @@ class E220ProtocolTest {
         assertEquals("0x0001", legacy.addr)
         assertEquals("1", legacy.rssiNoise)
         assertEquals("1", legacy.rssiByte)
+        assertEquals("-85", legacy.lbrRssi)
         assertFalse(validateConfig(legacy).containsKey("addr"))
+    }
+
+    @Test
+    fun `binary mapping does not reuse status interval for lbt rssi`() {
+        val current = BleConfig(
+            userId24 = 0x123456,
+            username = "node-A",
+            statusIntervalMs = 1200
+        )
+        val config = E220Config(lbrRssi = "-128")
+
+        val binary = E220ConfigMapper.toBinary(config, current)
+
+        assertEquals(1200, binary.statusIntervalMs)
     }
 
     @Test

@@ -98,25 +98,28 @@ class BleTypesTest {
 
     @Test
     fun `status payload round trips through firmware schema`() {
-        val payload = byteArrayOf(
-            0x03,
-            0x0A, 0x0B,
-            0xB8.toByte(),
-            0x01,
-            0x02,
-            0x03,
-            0x04,
-            0x01,
-            0x02,
-            0x03,
-            0x04,
-            0x01,
-            0x02,
-            0x03,
-            0xAA.toByte(),
-            0xBB.toByte(),
-            0xCC.toByte()
-        )
+        val payload = ByteArray(51)
+        payload[0] = 0x03
+        payload[1] = 0x0A
+        payload[2] = 0x0B
+        payload[3] = 0xB8.toByte()
+        payload[4] = 0x01
+        payload[5] = 0x02
+        payload[6] = 0x03
+        payload[7] = 0x04
+        payload[8] = 0x01
+        payload[9] = 0x02
+        payload[10] = 0x03
+        payload[11] = 0x04
+        payload[12] = 0x01
+        payload[13] = 0x02
+        payload[14] = 0x03
+        payload[15] = 0xAA.toByte()
+        payload[16] = 0xBB.toByte()
+        payload[17] = 0xCC.toByte()
+        payload[18] = 0x01
+        "E220-900T30D".toByteArray().copyInto(payload, 19)
+        "7463-0-17".toByteArray().copyInto(payload, 35)
 
         val status = StatusTelemetry.fromPayload(payload)
 
@@ -132,7 +135,9 @@ class BleTypesTest {
         assertEquals(2, status.fwMinor)
         assertEquals(3, status.fwPatch)
         assertEquals(0xAABBCC, status.deviceId24)
-        assertEquals(false, status.bleEncrypted)
+        assertEquals(true, status.bleEncrypted)
+        assertEquals("E220-900T30D", status.radioModel)
+        assertEquals("7463-0-17", status.softwareVersion)
     }
 
     @Test

@@ -96,10 +96,11 @@ class BleUartManager(context: Context) {
 
         private const val CONNECT_TIMEOUT_MS = 25000L  // includes up to 15s bonding
         private const val WRITE_TIMEOUT_MS = 3000L
-        private const val ACK_TIMEOUT_MS = 350L
+        private const val ACK_TIMEOUT_MS = 600L
         private const val MAX_RETRY = 4
         private const val RECONNECT_DELAY_MS = 700L
         private const val TARGET_MTU = 247
+        private const val MIN_INTER_FRAME_GAP_MS = 150L
     }
 
     private fun hasConnectPermission(): Boolean {
@@ -225,18 +226,48 @@ class BleUartManager(context: Context) {
         }
     }
 
+    suspend fun readStatusCharacteristic(): StatusTelemetry = withContext(Dispatchers.IO) {
+        attMutex.withLock {
+            val g = gatt ?: throw IOException("Not connected")
+            val c = statusChar ?: throw IOException("STATUS characteristic unavailable")
+            val rd = CompletableDeferred<ByteArray>()
+            pendingRead = rd
+            if (!g.readCharacteristic(c)) throw IOException("readCharacteristic failed")
+            val value = withTimeout(WRITE_TIMEOUT_MS) { rd.await() }
+            StatusTelemetry.fromPayload(value)
+        }
+    }
+
     private suspend fun sendReliable(frame: BleFrame) = withContext(Dispatchers.IO) {
         ensureConnected()
-        runAckRetry(
-            initialSeq = frame.seq,
-            maxRetry = MAX_RETRY,
-            timeoutMs = ACK_TIMEOUT_MS,
-            nextSeq = ::allocSeq,
-            registerWaiter = reliableState::registerWaiter,
-            removeWaiter = reliableState::removeWaiter
-        ) { attempt, seq ->
-            val attemptFrame = if (attempt == 1) frame else frame.copy(seq = seq)
-            writeFrame(attemptFrame)
+        try {
+            runAckRetry(
+                initialSeq = frame.seq,
+                maxRetry = MAX_RETRY,
+                timeoutMs = ACK_TIMEOUT_MS,
+                nextSeq = ::allocSeq,
+                registerWaiter = reliableState::registerWaiter,
+                removeWaiter = reliableState::removeWaiter
+            ) { attempt, seq ->
+                val attemptFrame = if (attempt == 1) frame else frame.copy(seq = seq)
+                if (attempt > 1) {
+                    ackRetryEventCount += 1
+                    Log.w(
+                        TAG,
+                        "ACK retry #$ackRetryEventCount attempt=$attempt type=${frame.type} seq=${attemptFrame.seq} timeoutMs=$ACK_TIMEOUT_MS"
+                    )
+                }
+                writeFrame(attemptFrame)
+            }
+        } catch (e: IOException) {
+            if (e.message?.startsWith("ACK timeout") == true) {
+                ackTimeoutEventCount += 1
+                Log.w(
+                    TAG,
+                    "ACK timeout #$ackTimeoutEventCount type=${frame.type} seq=${frame.seq} throttles=$throttleEventCount retries=$ackRetryEventCount"
+                )
+            }
+            throw e
         }
     }
 
@@ -248,6 +279,13 @@ class BleUartManager(context: Context) {
             val raw = codec.encode(frame)
             val mtu = (g.device?.let { currentMtu } ?: TARGET_MTU).coerceAtLeast(23)
             val maxChunk = (mtu - 3).coerceAtLeast(20)
+            val now = System.currentTimeMillis()
+            val gapMs = MIN_INTER_FRAME_GAP_MS - (now - lastFrameWriteAtMs)
+            if (gapMs > 0) {
+                Log.d(TAG, "Throttling BLE frame write #${throttleEventCount + 1} by ${gapMs}ms type=${frame.type} seq=${frame.seq}")
+                throttleEventCount += 1
+                kotlinx.coroutines.delay(gapMs)
+            }
             Log.d(TAG, "writeFrame type=${frame.type} seq=${frame.seq} bytes=${raw.size} mtu=$mtu chunks=${(raw.size + maxChunk - 1) / maxChunk}")
             var offset = 0
             while (offset < raw.size) {
@@ -261,11 +299,29 @@ class BleUartManager(context: Context) {
                 withTimeout(WRITE_TIMEOUT_MS) { wd.await() }
                 offset = end
             }
+            lastFrameWriteAtMs = System.currentTimeMillis()
             Log.d(TAG, "writeFrame complete type=${frame.type} seq=${frame.seq}")
         }
     }
 
     private var currentMtu: Int = 23
+    private var lastFrameWriteAtMs: Long = 0L
+    private var throttleEventCount: Int = 0
+    private var ackRetryEventCount: Int = 0
+    private var ackTimeoutEventCount: Int = 0
+
+    private fun resetTransportCounters() {
+        throttleEventCount = 0
+        ackRetryEventCount = 0
+        ackTimeoutEventCount = 0
+    }
+
+    private fun logTransportCounters(prefix: String) {
+        Log.d(
+            TAG,
+            "$prefix throttleCount=$throttleEventCount ackRetryCount=$ackRetryEventCount ackTimeoutCount=$ackTimeoutEventCount"
+        )
+    }
 
     private suspend fun ensureConnected() {
         if (_connected.value && gatt != null && rxChar != null && txChar != null) return
@@ -289,6 +345,8 @@ class BleUartManager(context: Context) {
         pendingRead = null
 
         reliableState.clear()
+        logTransportCounters("BLE session closing")
+        resetTransportCounters()
 
         rxChar = null
         txChar = null
@@ -434,6 +492,10 @@ class BleUartManager(context: Context) {
                 // discovery on LineageOS 18.1.
                 ensureBond(g.device)
 
+                runCatching { readStatusCharacteristic() }
+                    .onSuccess { _status.value = it }
+                    .onFailure { Log.w(TAG, "initial status read failed", it) }
+
                 pendingDiscover?.complete(Unit)
                 pendingDiscover = null
             }
@@ -500,7 +562,17 @@ class BleUartManager(context: Context) {
 
     private fun handleIncoming(uuid: UUID, value: ByteArray) {
         if (uuid == STATUS_UUID) {
-            runCatching { StatusTelemetry.fromPayload(value) }.onSuccess { _status.value = it }
+            runCatching { StatusTelemetry.fromPayload(value) }.onSuccess { parsed ->
+                val current = _status.value
+                _status.value = if (current != null) {
+                    parsed.copy(
+                        radioModel = parsed.radioModel.ifBlank { current.radioModel },
+                        softwareVersion = parsed.softwareVersion.ifBlank { current.softwareVersion }
+                    )
+                } else {
+                    parsed
+                }
+            }
             return
         }
         if (uuid != TX_UUID) return

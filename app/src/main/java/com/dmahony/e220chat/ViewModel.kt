@@ -17,6 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import android.content.Intent
 import android.os.Build
+import java.util.concurrent.ThreadLocalRandom
 
 class E220ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val repo = E220Repository(application.applicationContext)
@@ -122,7 +123,7 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         if (repo.selectedDeviceAddress.isNullOrBlank()) {
             viewModelScope.launch { refreshBluetoothDevices() }
         } else {
-            viewModelScope.launch { refreshBluetoothDevices(autoConnectSavedDevice = true) }
+            viewModelScope.launch { autoConnectSavedDeviceOnStartup() }
         }
         refreshAllIfConnected()
         syncTransportLogs()
@@ -132,6 +133,34 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     fun setTab(tab: AppTab) {
         selectedTab = tab
         syncBinaryReadReceipts()
+    }
+
+    private fun autoConnectSavedDeviceOnStartup() {
+        val address = repo.selectedDeviceAddress.orEmpty()
+        if (address.isBlank()) return
+        startupAutoConnectAttempted = true
+        viewModelScope.launch {
+            try {
+                connectionState = ConnectionState.CONNECTING
+                val name = repo.selectedDeviceName.orEmpty().ifBlank { address }
+                connectionHint = "Connecting to $name..."
+                val connected = repo.connect(address)
+                selectedBluetoothAddress = connected.address
+                selectedBluetoothName = connected.name
+                connectionState = ConnectionState.CONNECTED
+                connectionHint = "Connected to ${connected.name}"
+                clearConnectionErrors()
+                refreshAllIfConnected()
+                syncTransportLogs()
+            } catch (e: Exception) {
+                startupAutoConnectAttempted = false
+                connectionState = ConnectionState.DISCONNECTED
+                connectionHint = "Saved BLE device wasn't ready, scanning for it..."
+                syncTransportLogs()
+                delay(500)
+                refreshBluetoothDevices(autoConnectSavedDevice = true)
+            }
+        }
     }
 
     fun toggleTheme() {
@@ -406,6 +435,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                         state = "running",
                         message = "Bluetooth link lost, reconnecting..."
                     )
+                    if (repo.useBinaryTransport) {
+                        refreshChatLocked()
+                    }
                     syncTransportLogs()
                     return@launch
                 }
@@ -416,6 +448,9 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
                     state = "error",
                     message = e.message ?: "Send failed"
                 )
+                if (repo.useBinaryTransport) {
+                    refreshChatLocked()
+                }
                 syncTransportLogs()
                 onError(e.message ?: "Failed to send message")
             }
@@ -423,6 +458,8 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
     }
 
     private suspend fun sendChunkWithRetry(chunk: String, index: Int, totalChunks: Int) {
+        val messageId = ThreadLocalRandom.current().nextLong()
+        val messageIdHex = messageId.toULong().toString(16).padStart(16, '0')
         var attempt = 0
         while (true) {
             attempt++
@@ -437,17 +474,23 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
             }
             operationStatus = operationStatus.copy(type = "send", state = "running", message = progress)
             try {
-                repo.sendMessage(chunk)
+                repo.sendMessage(chunk, messageId)
                 return
             } catch (e: Exception) {
                 if (e is java.util.concurrent.CancellationException) throw e
                 if (!isTransportLossError(e) || attempt >= 3) {
+                    if (repo.useBinaryTransport) {
+                        repo.markBinaryOutgoingMessageStatus(messageIdHex, DeliveryStatus.FAILED)
+                    }
                     throw e
                 }
                 connectionState = ConnectionState.CONNECTING
                 connectionHint = "Bluetooth link lost, reconnecting..."
                 operationStatus = operationStatus.copy(type = "send", state = "running", message = "Reconnecting before retrying chunk ${index + 1}/$totalChunks")
                 if (!waitForTransportReconnect()) {
+                    if (repo.useBinaryTransport) {
+                        repo.markBinaryOutgoingMessageStatus(messageIdHex, DeliveryStatus.FAILED)
+                    }
                     throw IOException("Bluetooth reconnect timed out")
                 }
                 delay(250L * attempt)
@@ -539,29 +582,22 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
 
     private fun applyChatSnapshot(snapshot: ChatSnapshot) {
         val previousMessages = chatMessages
-        val previousCount = previousMessages.size
         if (snapshot.reset || lastChatSequence < 0 || snapshot.sequence < lastChatSequence) {
             chatMessages = snapshot.messages
         } else if (snapshot.sequence > lastChatSequence) {
             chatMessages = chatMessages + snapshot.messages
-            if (!isInForeground && snapshot.messages.isNotEmpty()) {
-                val senderName = selectedBluetoothName.ifBlank { "Radio" }
-                notificationManager.showMessageNotifications(snapshot.messages, senderName)
-            }
         }
         lastChatSequence = snapshot.sequence
-        val newMessages = if (snapshot.messages.size > previousCount) {
-            snapshot.messages.takeLast(snapshot.messages.size - previousCount)
-        } else {
+        val newIncoming = if (previousMessages.isEmpty()) {
             emptyList()
+        } else {
+            val previousIds = previousMessages.asSequence().map { it.messageId }.toHashSet()
+            snapshot.messages.filter { !it.sent && it.messageId !in previousIds }
         }
-        if (newMessages.isNotEmpty()) {
-            val hasIncoming = newMessages.any { !it.sent }
-            if (hasIncoming && !isInForeground || hasIncoming && selectedTab != AppTab.CHAT) {
-                val senderName = selectedBluetoothName.ifBlank { "Radio" }
-                notificationManager.showMessageNotifications(newMessages, senderName)
-                onHapticRequest?.invoke()
-            }
+        if (newIncoming.isNotEmpty() && (!isInForeground || selectedTab != AppTab.CHAT)) {
+            val senderName = selectedBluetoothName.ifBlank { "Radio" }
+            notificationManager.showMessageNotifications(newIncoming, senderName)
+            onHapticRequest?.invoke()
         }
         syncBinaryReadReceipts()
     }
@@ -1092,6 +1128,14 @@ class E220ChatViewModel(application: Application) : AndroidViewModel(application
         refreshDiagnostics()
         refreshWifi()
         refreshDebug()
+        if (repo.useBinaryTransport) {
+            viewModelScope.launch {
+                delay(1200)
+                if (repo.isConnected && (diagnostics.radioModel.isBlank() || diagnostics.softwareVersion.isBlank())) {
+                    refreshDiagnostics()
+                }
+            }
+        }
     }
 
     private fun scheduleReconnectAfterReboot() {

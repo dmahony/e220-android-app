@@ -111,7 +111,7 @@ object E220Protocol {
             rssiNoise = data.optInt("rssi_noise", 1).toString(),
             rssiByte = data.optInt("rssi_byte", 1).toString(),
             lbt = data.optInt("lbt", 0).toString(),
-            lbrRssi = data.optInt("lbr_rssi", -55).toString(),
+            lbrRssi = data.optInt("lbr_rssi", -85).toString(),
             lbrTimeout = data.optInt("lbr_timeout", 2000).toString(),
             urxt = data.optInt("urxt", 3).toString(),
             worCycle = data.optInt("wor_cycle", 3).toString(),
@@ -139,6 +139,14 @@ object E220Protocol {
             freeHeap = data.optLong("free_heap", 0L),
             minFreeHeap = data.optLong("min_free_heap", 0L),
             btName = data.optString("bt_name", ""),
+            radioModel = data.optString(
+                "radio_model",
+                data.optString("radioModel", data.optString("model", data.optString("devtype", data.optString("DEVTYPE", ""))))
+            ),
+            softwareVersion = data.optString(
+                "software_version",
+                data.optString("softwareVersion", data.optString("firmware_version", data.optString("version", data.optString("fwcode", data.optString("FWCODE", "")))))
+            ),
             btHasClient = data.optBooleanFlexible("bt_has_client", false),
             btRequestCount = data.optInt("bt_request_count", 0),
             btParseErrors = data.optInt("bt_parse_errors", 0),
@@ -269,7 +277,7 @@ object E220Protocol {
         put("rssi_noise", JsonPrimitive(rssiNoise.toIntOrNull() ?: 1))
         put("rssi_byte", JsonPrimitive(rssiByte.toIntOrNull() ?: 1))
         put("lbt", JsonPrimitive(lbt.toIntOrNull() ?: 0))
-        put("lbr_rssi", JsonPrimitive(lbrRssi.toIntOrNull() ?: -55))
+        put("lbr_rssi", JsonPrimitive(lbrRssi.toIntOrNull() ?: -85))
         put("lbr_timeout", JsonPrimitive(lbrTimeout.toIntOrNull() ?: 2000))
         put("urxt", JsonPrimitive(urxt.toIntOrNull() ?: 3))
         put("wor_cycle", JsonPrimitive(worCycle.toIntOrNull() ?: 3))

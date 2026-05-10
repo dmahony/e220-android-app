@@ -568,7 +568,7 @@ internal suspend fun sendGpsMessage(
 ) {
     val location = resolveCurrentLocation(context)
     if (location == null) {
-        onError("Unable to read GPS location. Turn on location services and try again.")
+        onError("Unable to read a GPS or network location fix. Try again in an open area after location has had a moment to lock on.")
         return
     }
     vm.sendMessage(buildGpsMessage(location.latitude, location.longitude), onError)
@@ -640,6 +640,17 @@ internal fun MessageBubble(message: ChatMessage) {
                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    if (!message.sent) {
+                        Text(
+                            text = message.senderName.ifBlank {
+                                message.senderUserId24?.let { "u${it.toString(16).padStart(6, '0')}" } ?: "Radio"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                     if (!message.sent && message.rssi != null) {
                         MessageRssiBadge(message.rssi)
                     }

@@ -13,6 +13,8 @@ internal suspend fun E220Repository.getDiagnostics(): Diagnostics {
             freeHeap = 0,
             minFreeHeap = 0,
             btName = selectedDeviceName.orEmpty(),
+            radioModel = st?.radioModel.orEmpty(),
+            softwareVersion = st?.softwareVersion.orEmpty(),
             btHasClient = isConnected,
             btRequestCount = binaryChatSequence,
             btParseErrors = 0,

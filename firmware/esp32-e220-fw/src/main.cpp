@@ -112,9 +112,17 @@ struct StatusPayload {
   uint8_t fwPatch;
   uint8_t deviceId[3];
   uint8_t bleEncrypted;   // 1 if link encrypted
+  char radioModel[16];
+  char softwareVersion[16];
 };
 
-constexpr size_t STATUS_PAYLOAD_LEN = 19;
+constexpr size_t STATUS_PAYLOAD_LEN = 19 + 16 + 16;
+
+void writeFixedString(uint8_t *out, size_t &idx, const char *src, size_t maxLen) {
+  const size_t n = src ? strnlen(src, maxLen - 1) : 0;
+  if (n > 0) memcpy(out + idx, src, n);
+  idx += maxLen;
+}
 
 void serializeStatusPayload(const StatusPayload &sp, uint8_t *out) {
   size_t idx = 0;
@@ -137,6 +145,8 @@ void serializeStatusPayload(const StatusPayload &sp, uint8_t *out) {
   out[idx++] = sp.deviceId[1];
   out[idx++] = sp.deviceId[2];
   out[idx++] = sp.bleEncrypted;
+  writeFixedString(out, idx, sp.radioModel, sizeof(sp.radioModel));
+  writeFixedString(out, idx, sp.softwareVersion, sizeof(sp.softwareVersion));
 }
 
 template<typename T, size_t N>
@@ -203,6 +213,8 @@ uint16_t gBleConnHandle = 0;
 uint16_t gBleNotifyPayloadMax = 20;
 bool gBleEncrypted = false;     // link is encrypted
 bool gBleBonded = false;        // device is bonded
+char gRadioModel[16] = "";
+char gSoftwareVersion[16] = "";
 
 RingQueue<Frame, 32> gBleRxQueue;
 RingQueue<Frame, 32> gBleTxQueue;
@@ -378,6 +390,11 @@ void setE220Mode(bool configMode) {
   digitalWrite(E220_M0_PIN, configMode ? HIGH : LOW);
   digitalWrite(E220_M1_PIN, configMode ? HIGH : LOW);
   delay(50);
+  Serial.printf("[E220] mode=%s M0=%d M1=%d AUX=%d\n",
+                configMode ? "CONFIG" : "NORMAL",
+                digitalRead(E220_M0_PIN),
+                digitalRead(E220_M1_PIN),
+                digitalRead(E220_AUX_PIN));
 }
 
 bool waitE220Ready(uint32_t timeoutMs = 2000) {
@@ -387,6 +404,74 @@ bool waitE220Ready(uint32_t timeoutMs = 2000) {
     delay(10);
   }
   return false;
+}
+
+bool readE220AtLine(const char *command, const char *key, char *out, size_t outCap, uint32_t timeoutMs = 1000) {
+  if (!command || !out || outCap == 0) return false;
+  out[0] = '\0';
+
+  while (E220.available()) E220.read();
+  E220.print(command);
+  E220.print("\r\n");
+  E220.flush();
+
+  char line[80]{};
+  size_t idx = 0;
+  const uint32_t deadline = millis() + timeoutMs;
+  const size_t keyLen = key ? strlen(key) : 0;
+  while (millis() < deadline) {
+    while (E220.available()) {
+      const char ch = (char)E220.read();
+      if (ch == '\r') continue;
+      if (ch == '\n') {
+        line[idx] = '\0';
+        if (idx > 0) {
+          const char *normalized = line;
+          while (*normalized == '+' || *normalized == ' ' || *normalized == '\t') normalized++;
+          if (!key || strncmp(normalized, key, keyLen) == 0) {
+            const char *value = normalized + keyLen;
+            while (*value == '=' || *value == ':' || *value == ' ' || *value == '\t') value++;
+            snprintf(out, outCap, "%s", value);
+            return true;
+          }
+        }
+        idx = 0;
+        continue;
+      }
+      if (idx + 1 < sizeof(line)) {
+        line[idx++] = ch;
+      }
+    }
+    delay(10);
+  }
+  return false;
+}
+
+bool refreshE220DeviceInfo(bool logDetails = true) {
+  char model[16]{};
+  char version[16]{};
+
+  const bool modelOk = readE220AtLine("AT+DEVTYPE=?", "DEVTYPE", model, sizeof(model));
+  const bool versionOk = readE220AtLine("AT+FWCODE=?", "FWCODE", version, sizeof(version));
+
+  if (modelOk) {
+    snprintf(gRadioModel, sizeof(gRadioModel), "%s", model);
+  } else {
+    gRadioModel[0] = '\0';
+  }
+
+  if (versionOk) {
+    snprintf(gSoftwareVersion, sizeof(gSoftwareVersion), "%s", version);
+  } else {
+    gSoftwareVersion[0] = '\0';
+  }
+
+  if (logDetails) {
+    Serial.printf("[E220] Device info model=%s fw=%s\n",
+                  gRadioModel[0] ? gRadioModel : "<unknown>",
+                  gSoftwareVersion[0] ? gSoftwareVersion : "<unknown>");
+  }
+  return modelOk || versionOk;
 }
 
 void setE220UARTBaud(uint32_t baud) {
@@ -478,11 +563,13 @@ void emitConfigFrame(uint8_t seqToUse) {
 }
 
 bool refreshE220RadioConfig(bool logDetails = true) {
+  if (logDetails) Serial.println("[E220] refreshE220RadioConfig: entering CONFIG mode");
   setE220Mode(true);
   delay(15);
   if (!waitE220Ready(2000)) {
     if (logDetails) Serial.println("[E220] Config mode failed - AUX timeout");
     setE220Mode(false);
+    if (logDetails) Serial.println("[E220] refreshE220RadioConfig: failed, returned to NORMAL mode");
     return false;
   }
 
@@ -534,10 +621,15 @@ bool refreshE220RadioConfig(bool logDetails = true) {
                   gCfg.rssiNoise, gCfg.rssiByte, gCfg.worCycle);
   }
 
+  refreshE220DeviceInfo(logDetails);
+
   setE220Mode(false);
   delay(50);
   if (gCfg.baud != E220_UART_BAUD) {
     setE220UARTBaud(gCfg.baud);
+  }
+  if (logDetails) {
+    Serial.println("[E220] refreshE220RadioConfig: read OK and returned to NORMAL mode");
   }
   publishConfigCharacteristic();
   return true;
@@ -589,6 +681,8 @@ void pushStatusFrame(bool force) {
   sp.fwPatch = 0;
   memcpy(sp.deviceId, gDeviceId, 3);
   sp.bleEncrypted = gBleEncrypted ? 1 : 0;
+  snprintf(sp.radioModel, sizeof(sp.radioModel), "%s", gRadioModel);
+  snprintf(sp.softwareVersion, sizeof(sp.softwareVersion), "%s", gSoftwareVersion);
 
   uint8_t payload[STATUS_PAYLOAD_LEN]{};
   serializeStatusPayload(sp, payload);
@@ -628,12 +722,14 @@ void readE220Config();
 bool writeE220Config();
 
 bool writeE220Config() {
+  Serial.println("[E220] writeE220Config: entering CONFIG mode");
   setE220UARTBaud(E220_UART_BAUD);
   setE220Mode(true);
   delay(15);
   if (!waitE220Ready(2000)) {
     Serial.println("[E220] Write config failed - AUX timeout");
     setE220Mode(false);
+    Serial.println("[E220] writeE220Config: failed, returned to NORMAL mode");
     return false;
   }
   delay(50);
@@ -659,6 +755,7 @@ bool writeE220Config() {
   Serial.printf("[E220] Wrote config: addr=0x%04X ch=%u baud=%u parity=%u air=%u txpwr=%u\n",
                 gCfg.addr, gCfg.channel, e220BaudFromReg((reg0 >> 5) & 0x07),
                 gCfg.parity, gCfg.airrate, gCfg.txpower);
+  Serial.println("[E220] writeE220Config: write OK and returned to NORMAL mode");
   return true;
 }
 
@@ -882,12 +979,17 @@ void setupRadio() {
   pinMode(E220_AUX_PIN, INPUT_PULLUP);
   digitalWrite(E220_M0_PIN, LOW);
   digitalWrite(E220_M1_PIN, LOW);
+  Serial.printf("[E220] Startup AUX=%d M0=%d M1=%d\n",
+                digitalRead(E220_AUX_PIN),
+                digitalRead(E220_M0_PIN),
+                digitalRead(E220_M1_PIN));
 
   // Baud scan: try to read E220 config at each possible baud rate.
   // A previous firmware bug may have misconfigured the E220 to a wrong baud.
   static const uint32_t baudRates[] = {9600, 1200, 2400, 4800, 19200, 38400, 57600, 115200};
   bool configReadOk = false;
   for (uint32_t baud : baudRates) {
+    Serial.printf("[E220] Boot config read attempt at %u baud\n", baud);
     E220.begin(baud, SERIAL_8N1, E220_RX_PIN, E220_TX_PIN);
     configReadOk = refreshE220RadioConfig(false);
     if (configReadOk) {
@@ -895,6 +997,7 @@ void setupRadio() {
                     baud, gCfg.channel, gCfg.addr);
       break;
     }
+    Serial.printf("[E220] Boot config read failed at %u baud\n", baud);
   }
   if (!configReadOk) {
     // Fallback: use default baud and hope
@@ -905,6 +1008,7 @@ void setupRadio() {
   // Force UART baud back to our preferred rate
   gCfg.baud = E220_UART_BAUD;
   setE220UARTBaud(E220_UART_BAUD);
+  Serial.printf("[E220] Boot UART set to %u baud\n", E220_UART_BAUD);
 }
 
 void sendBleFrame(const Frame &f) {
@@ -1196,7 +1300,9 @@ void setup() {
   if (!writeE220Config()) {
     Serial.println("[E220] WARNING: Failed to write E220 config - radio may be misconfigured");
   } else {
+    Serial.println("[E220] Boot-time config write succeeded");
     refreshE220RadioConfig(false);
+    Serial.println("[E220] Boot-time config readback attempted after write");
   }
   setupBle();
 

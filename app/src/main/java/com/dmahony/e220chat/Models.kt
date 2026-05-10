@@ -89,7 +89,7 @@ data class E220Config(
     val rssiByte: String = "1",
     val lbt: String = "0",
     @SerialName("lbr_rssi")
-    val lbrRssi: String = "-55",
+    val lbrRssi: String = "-85",
     @SerialName("lbr_timeout")
     val lbrTimeout: String = "2000",
     val urxt: String = "3",
@@ -131,6 +131,10 @@ data class Diagnostics(
     val minFreeHeap: Long = 0,
     @SerialName("bt_name")
     val btName: String = "",
+    @SerialName("radio_model")
+    val radioModel: String = "",
+    @SerialName("software_version")
+    val softwareVersion: String = "",
     @SerialName("bt_has_client")
     val btHasClient: Boolean = false,
     @SerialName("bt_request_count")

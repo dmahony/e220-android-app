@@ -20,7 +20,7 @@ class ConfigValidationTest {
         baud: String = "9600",
         addr: String = "0x0000",
         dest: String = "0xFFFF",
-        lbrRssi: String = "-55",
+        lbrRssi: String = "-85",
         lbrTimeout: String = "2000",
         cryptH: String = "0",
         urxt: String = "3",

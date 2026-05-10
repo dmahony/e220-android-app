@@ -378,7 +378,7 @@ class ConfigValidationComprehensiveTest {
             rssiNoise = "0",
             rssiByte = "0",
             lbt = "0",
-            lbrRssi = "-55",
+            lbrRssi = "-85",
             lbrTimeout = "2000",
             urxt = "3",
             worCycle = "3",

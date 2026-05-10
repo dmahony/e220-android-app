@@ -30,6 +30,9 @@ internal fun RadioSettingsScreen(
 ) {
     val scroll = rememberScrollState()
 
+    fun optionLabel(options: List<Pair<String, String>>, value: String): String =
+        options.firstOrNull { it.second == value }?.first ?: value
+
     LaunchedEffect(vm.selectedTab, vm.connectionState) {
         if (vm.selectedTab == AppTab.SETTINGS && vm.connectionState == ConnectionState.CONNECTED) {
             onRefresh()
@@ -66,7 +69,7 @@ internal fun RadioSettingsScreen(
             ) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        "Manual-backed presets + ranges",
+                        "Current settings",
                         style = MaterialTheme.typography.titleSmall
                     )
                     FlowRow(
@@ -75,9 +78,16 @@ internal fun RadioSettingsScreen(
                     ) {
                         val channel = freqStringToChannelOrFallback(vm.config.freq, 0)
                         MiniChip("Ch $channel • ${vm.config.freq} MHz")
-                        MiniChip("Power ${vm.config.txpower}")
-                        MiniChip("Baud ${vm.config.baud}")
-                        MiniChip("Mode ${vm.config.txmode}")
+                        MiniChip("Power ${optionLabel(txPowerOptions, vm.config.txpower)}")
+                        MiniChip("Baud ${optionLabel(baudOptions, vm.config.baud)}")
+                        MiniChip("TX mode ${optionLabel(txModeOptions, vm.config.txmode)}")
+                    }
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        MiniChip("Model: ${vm.diagnostics.radioModel.ifBlank { "—" }}")
+                        MiniChip("Software version: ${vm.diagnostics.softwareVersion.ifBlank { "—" }}")
                     }
                 }
             }
@@ -234,7 +244,7 @@ internal fun RadioSettingsScreen(
                     ConfigField(
                         label = "LBT RSSI",
                         value = vm.config.lbrRssi,
-                        supportingText = "Manual range: 0 to -128 dBm. Default -55.",
+                        supportingText = "Manual range: -128 to 0 dBm. Default -85.",
                         errorText = vm.configFieldErrors["lbr_rssi"],
                         modifier = Modifier.weight(1f),
                         keyboardType = KeyboardType.Number

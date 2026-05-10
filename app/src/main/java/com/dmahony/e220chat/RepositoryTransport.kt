@@ -456,7 +456,7 @@ private fun E220Repository.markBinaryChatDirty() {
     }
 }
 
-private fun E220Repository.upsertBinaryMessage(messageId: String, updater: (ChatMessage?) -> ChatMessage): ChatMessage {
+internal fun E220Repository.upsertBinaryMessage(messageId: String, updater: (ChatMessage?) -> ChatMessage): ChatMessage {
     synchronized(binaryChatMessages) {
         val index = binaryChatMessages.indexOfFirst { it.messageId == messageId }
         val current = if (index >= 0) binaryChatMessages[index] else null
@@ -469,6 +469,55 @@ private fun E220Repository.upsertBinaryMessage(messageId: String, updater: (Chat
         binaryChatSequence += 1
         binaryChatReset = true
         return updated
+    }
+}
+
+internal fun E220Repository.markBinaryOutgoingMessagePending(messageId: String, text: String, senderUserId24: Int, senderName: String): ChatMessage {
+    return upsertBinaryMessage(messageId) { current ->
+        current?.copy(
+            text = current.text.ifBlank { text },
+            sent = true,
+            delivered = current.delivered,
+            senderName = senderName,
+            senderUserId24 = senderUserId24,
+            read = current.read,
+            messageId = messageId,
+            deliveryStatus = DeliveryStatus.SENDING,
+            rssi = current.rssi
+        ) ?: ChatMessage(
+            text = text,
+            sent = true,
+            delivered = false,
+            senderName = senderName,
+            senderUserId24 = senderUserId24,
+            read = false,
+            messageId = messageId,
+            deliveryStatus = DeliveryStatus.SENDING
+        )
+    }
+}
+
+internal fun E220Repository.markBinaryOutgoingMessageStatus(messageId: String, status: DeliveryStatus): ChatMessage {
+    return upsertBinaryMessage(messageId) { current ->
+        val base = current ?: ChatMessage(
+            text = "",
+            sent = true,
+            delivered = false,
+            messageId = messageId,
+            deliveryStatus = status
+        )
+        base.copy(
+            sent = true,
+            delivered = when (status) {
+                DeliveryStatus.DELIVERED, DeliveryStatus.READ -> true
+                else -> base.delivered
+            },
+            read = when (status) {
+                DeliveryStatus.READ -> true
+                else -> base.read
+            },
+            deliveryStatus = status
+        )
     }
 }
 
@@ -505,11 +554,11 @@ internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {
             val myUserId = binaryConfig?.userId24
             val isMine = myUserId != null && parsed.senderUserId24 == myUserId
             val messageId = parsed.messageId.formatBinaryMessageId()
-            val displayText = if (isMine) parsed.text else "[RX ${parsed.senderUserId24.toString(16).padStart(6, '0')}] ${parsed.text}"
+            val displayText = parsed.text
             val senderName = if (isMine) {
                 binaryConfig?.username.orEmpty()
             } else {
-                "u${parsed.senderUserId24.toString(16).padStart(6, '0')}"
+                binaryUserNames[parsed.senderUserId24] ?: "u${parsed.senderUserId24.toString(16).padStart(6, '0')}"
             }
             upsertBinaryMessage(messageId) { current ->
                 if (current != null) {
@@ -583,7 +632,18 @@ internal fun E220Repository.handleBinaryFrame(frame: BleFrame) {
         }
 
         MsgType.PROFILE -> {
-            appendTransportLog(TransportDirection.RECEIVED, "PROFILE len=${frame.payload.size}")
+            val payload = frame.payload
+            if (payload.size >= 4) {
+                val userId = ((payload[0].toInt() and 0xFF) shl 16) or
+                    ((payload[1].toInt() and 0xFF) shl 8) or
+                    (payload[2].toInt() and 0xFF)
+                val nameLen = (payload[3].toInt() and 0xFF).coerceAtMost(payload.size - 4)
+                val name = if (nameLen > 0) payload.copyOfRange(4, 4 + nameLen).toString(Charsets.UTF_8) else "u${userId.toString(16).padStart(6, '0')}"
+                binaryUserNames[userId] = name
+                appendTransportLog(TransportDirection.RECEIVED, "PROFILE user=${userId.toString(16).padStart(6, '0')} name=$name")
+            } else {
+                appendTransportLog(TransportDirection.RECEIVED, "PROFILE len=${frame.payload.size}")
+            }
         }
 
         MsgType.CONFIG -> {

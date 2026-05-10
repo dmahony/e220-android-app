@@ -58,6 +58,7 @@ class E220Repository(context: Context) {
     internal var binaryChatReset = false
     internal var binaryConfig: BleConfig? = null
     internal var binaryStatus: StatusTelemetry? = null
+    internal val binaryUserNames = linkedMapOf<Int, String>()
     private var lastBinaryConnected = false
 
     var connectionEventListener: ((TransportConnectionEvent) -> Unit)? = null

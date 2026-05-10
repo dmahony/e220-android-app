@@ -58,47 +58,18 @@ class E220NotificationManager(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        if (messages.size == 1) {
-            // Single message: show sender name + preview
-            val msg = messages.first()
-            val displaySender = msg.senderName.ifBlank { senderName }
-            val preview = msg.text.take(80) + if (msg.text.length > 80) "…" else ""
+        val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
+            .setSmallIcon(android.R.drawable.sym_def_app_icon)
+            .setContentTitle(if (messages.size == 1) "New radio message" else "${messages.size} new radio messages")
+            .setContentText("Tap to open chat")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .build()
 
-            val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
-                .setSmallIcon(android.R.drawable.sym_def_app_icon)
-                .setContentTitle(displaySender)
-                .setContentText(preview)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setContentIntent(pendingIntent)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .build()
-
-            nm.notify(MESSAGE_NOTIFICATION_BASE_ID + messages.hashCode(), notification)
-        } else {
-            // Multiple messages: use inbox style
-            val inboxStyle = NotificationCompat.InboxStyle()
-            messages.takeLast(5).forEach { msg ->
-                val displaySender = msg.senderName.ifBlank { "Radio" }
-                inboxStyle.addLine("$displaySender: ${msg.text.take(60)}")
-            }
-            if (messages.size > 5) {
-                inboxStyle.setSummaryText("+${messages.size - 5} more messages")
-            }
-
-            val notification = NotificationCompat.Builder(context, CHANNEL_MESSAGES)
-                .setSmallIcon(android.R.drawable.sym_def_app_icon)
-                .setContentTitle("${messages.size} new radio messages")
-                .setContentText("From $senderName")
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setAutoCancel(true)
-                .setContentIntent(pendingIntent)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setStyle(inboxStyle)
-                .build()
-
-            nm.notify(MESSAGE_NOTIFICATION_BASE_ID + messages.hashCode(), notification)
-        }
+        nm.notify(MESSAGE_NOTIFICATION_BASE_ID + messages.hashCode(), notification)
     }
 
     /**

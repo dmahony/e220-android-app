@@ -286,29 +286,56 @@ data class StatusTelemetry(
     val fwMinor: Int,
     val fwPatch: Int,
     val deviceId24: Int,
-    val bleEncrypted: Boolean = false
+    val bleEncrypted: Boolean = false,
+    val radioModel: String = "",
+    val softwareVersion: String = ""
 ) {
     companion object {
         fun fromPayload(payload: ByteArray): StatusTelemetry {
-            require(payload.size >= 18) { "STATUS payload too short" }
-            val buf = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
-            val fs = FlowState.from((buf.get().toInt() and 0xFF).toUByte())
-            val batt = buf.short.toInt() and 0xFFFF
-            val rssi = buf.get().toInt()
-            val qBleRx = buf.get().toInt() and 0xFF
-            val qRadioTx = buf.get().toInt() and 0xFF
-            val qRadioRx = buf.get().toInt() and 0xFF
-            val qBleTx = buf.get().toInt() and 0xFF
-            val uptime = buf.int.toLong() and 0xFFFFFFFFL
-            val fwMaj = buf.get().toInt() and 0xFF
-            val fwMin = buf.get().toInt() and 0xFF
-            val fwPat = buf.get().toInt() and 0xFF
-            val id0 = buf.get().toInt() and 0xFF
-            val id1 = buf.get().toInt() and 0xFF
-            val id2 = buf.get().toInt() and 0xFF
-            val id = (id0 shl 16) or (id1 shl 8) or id2
-            val encrypted = if (payload.size >= 19) (buf.get().toInt() and 0xFF) != 0 else false
-            return StatusTelemetry(fs, batt, rssi, qBleRx, qRadioTx, qRadioRx, qBleTx, uptime, fwMaj, fwMin, fwPat, id, encrypted)
+            require(payload.size >= 19) { "STATUS payload too short" }
+            val flowState = FlowState.from(payload[0].toUByte())
+            val batt = ((payload[1].toInt() and 0xFF) shl 8) or (payload[2].toInt() and 0xFF)
+            val rssi = payload[3].toInt()
+            val qBleRx = payload[4].toInt() and 0xFF
+            val qRadioTx = payload[5].toInt() and 0xFF
+            val qRadioRx = payload[6].toInt() and 0xFF
+            val qBleTx = payload[7].toInt() and 0xFF
+            val uptime = ((payload[8].toLong() and 0xFF) shl 24) or
+                ((payload[9].toLong() and 0xFF) shl 16) or
+                ((payload[10].toLong() and 0xFF) shl 8) or
+                (payload[11].toLong() and 0xFF)
+            val fwMaj = payload[12].toInt() and 0xFF
+            val fwMin = payload[13].toInt() and 0xFF
+            val fwPat = payload[14].toInt() and 0xFF
+            val id = ((payload[15].toInt() and 0xFF) shl 16) or ((payload[16].toInt() and 0xFF) shl 8) or (payload[17].toInt() and 0xFF)
+            val encrypted = (payload[18].toInt() and 0xFF) != 0
+            val radioModel = if (payload.size >= 35) {
+                payload.copyOfRange(19, 35).toString(Charsets.UTF_8).trimEnd('\u0000')
+            } else {
+                ""
+            }
+            val softwareVersion = if (payload.size >= 51) {
+                payload.copyOfRange(35, 51).toString(Charsets.UTF_8).trimEnd('\u0000')
+            } else {
+                ""
+            }
+            return StatusTelemetry(
+                flowState,
+                batt,
+                rssi,
+                qBleRx,
+                qRadioTx,
+                qRadioRx,
+                qBleTx,
+                uptime,
+                fwMaj,
+                fwMin,
+                fwPat,
+                id,
+                encrypted,
+                radioModel,
+                softwareVersion
+            )
         }
     }
 }

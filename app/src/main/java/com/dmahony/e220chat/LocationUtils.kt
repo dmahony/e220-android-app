@@ -23,21 +23,23 @@ suspend fun resolveCurrentLocation(context: Context): Location? = withContext(Di
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        val current = withTimeoutOrNull(5000L) {
-            suspendCancellableCoroutine<Location?> { continuation ->
-                locationManager.getCurrentLocation(
-                    LocationManager.GPS_PROVIDER,
-                    null,
-                    ContextCompat.getMainExecutor(context)
-                ) { location ->
-                    if (continuation.isActive) {
-                        continuation.resume(location)
+        for (provider in providers) {
+            val current = withTimeoutOrNull(5000L) {
+                suspendCancellableCoroutine<Location?> { continuation ->
+                    locationManager.getCurrentLocation(
+                        provider,
+                        null,
+                        ContextCompat.getMainExecutor(context)
+                    ) { location ->
+                        if (continuation.isActive) {
+                            continuation.resume(location)
+                        }
                     }
                 }
             }
-        }
-        if (current != null) {
-            return@withContext current
+            if (current != null) {
+                return@withContext current
+            }
         }
     }
 

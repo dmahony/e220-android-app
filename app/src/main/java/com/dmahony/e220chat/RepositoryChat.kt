@@ -1,5 +1,7 @@
 package com.dmahony.e220chat
 
+import java.util.concurrent.ThreadLocalRandom
+
 internal suspend fun E220Repository.getChat(sinceSequence: Int = 0): ChatSnapshot {
     if (useBinaryTransport) {
         val reset = binaryChatReset
@@ -31,27 +33,20 @@ internal suspend fun E220Repository.clearChatHistory() {
     exchange(E220Protocol.buildClearChatRequest())
 }
 
-internal suspend fun E220Repository.sendMessage(message: String): String {
+internal suspend fun E220Repository.sendMessage(message: String, messageId: Long = ThreadLocalRandom.current().nextLong()): String {
     if (useBinaryTransport) {
-        val destination = parseDestinationUserId()
-        val messageId = java.util.concurrent.ThreadLocalRandom.current().nextLong()
-        val senderUserId = binaryConfig?.userId24 ?: destination
-        bleV2.sendText(destination, messageId, message)
-        synchronized(binaryChatMessages) {
-            binaryChatMessages.add(
-                ChatMessage(
-                    text = message,
-                    sent = true,
-                    delivered = false,
-                    senderUserId24 = senderUserId,
-                    messageId = messageId.toULong().toString(16).padStart(16, '0'),
-                    deliveryStatus = DeliveryStatus.SENT
-                )
-            )
-            binaryChatSequence += 1
-            binaryChatReset = true
-        }
-        appendTransportLog(TransportDirection.SENT, "TEXT dst=${destination.toString(16).padStart(6, '0')} msg=${messageId.toULong().toString(16).padStart(16, '0')} len=${message.length}")
+        val sourceUserId = binaryConfig?.userId24
+            ?: E220ConfigMapper.defaultBinaryConfig(selectedDeviceAddress).userId24
+        val messageIdHex = messageId.toULong().toString(16).padStart(16, '0')
+        markBinaryOutgoingMessagePending(
+            messageId = messageIdHex,
+            text = message,
+            senderUserId24 = sourceUserId,
+            senderName = binaryConfig?.username.orEmpty()
+        )
+        bleV2.sendText(sourceUserId, messageId, message)
+        markBinaryOutgoingMessageStatus(messageIdHex, DeliveryStatus.SENT)
+        appendTransportLog(TransportDirection.SENT, "TEXT src=${sourceUserId.toString(16).padStart(6, '0')} msg=$messageIdHex len=${message.length}")
         return "queued"
     }
     val response = exchange(E220Protocol.buildSendRequest(message))

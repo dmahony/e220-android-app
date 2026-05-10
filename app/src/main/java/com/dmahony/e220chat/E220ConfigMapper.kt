@@ -73,7 +73,7 @@ internal object E220ConfigMapper {
             cryptH = cfg.cryptH.toString(),
             cryptL = cfg.cryptL.toString(),
             lbrTimeout = cfg.ackTimeoutMs.toString(),
-            lbrRssi = cfg.statusIntervalMs.toString(),
+            lbrRssi = "-85",
             saveType = cfg.profileIntervalSec.toString(),
             addr = "0x${(cfg.addr and 0xFFFF).toString(16).padStart(4, '0').uppercase()}",
             dest = "0x${cfg.dest.toString(16).padStart(4, '0').uppercase()}",
@@ -92,13 +92,15 @@ internal object E220ConfigMapper {
 
     fun toBinary(config: E220Config, current: BleConfig): BleConfig {
         requireValidConfig(config)
-        val userId = parseHex24(config.addr, current.userId24)
+        // Preserve the firmware's 24-bit device identity. The legacy addr field is the
+        // radio communication address, not the device/user identity used in chat frames.
+        val userId = current.userId24
         val username = (config.wifiApSsid.ifBlank { current.username }).take(19)
         return BleConfig(
             ackTimeoutMs = config.lbrTimeout.toIntOrNull()?.coerceIn(60, 2000) ?: current.ackTimeoutMs,
             maxRetries = config.urxt.toIntOrNull()?.coerceIn(1, 10) ?: current.maxRetries,
             radioTxIntervalMs = current.radioTxIntervalMs,
-            statusIntervalMs = config.lbrRssi.toIntOrNull()?.coerceIn(200, 5000) ?: current.statusIntervalMs,
+            statusIntervalMs = current.statusIntervalMs,
             profileIntervalSec = config.saveType.toIntOrNull()?.coerceIn(60, 3600) ?: current.profileIntervalSec,
             userId24 = userId,
             username = username,

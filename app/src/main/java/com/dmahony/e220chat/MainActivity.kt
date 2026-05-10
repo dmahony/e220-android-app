@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -42,12 +43,15 @@ import androidx.lifecycle.ViewModelProvider
 import com.dmahony.e220chat.ui.theme.E220ChatTheme
 
 class MainActivity : ComponentActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        val vm = ViewModelProvider(
+    private val vm by lazy {
+        ViewModelProvider(
             this,
             ViewModelProvider.AndroidViewModelFactory.getInstance(application)
         )[E220ChatViewModel::class.java]
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
 
         setContent {
             E220ChatTheme(darkTheme = vm.darkTheme) {
@@ -63,6 +67,7 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier
                         .fillMaxSize()
                         .background(terminalBackdrop)
+                        .safeDrawingPadding()
                 ) {
                     Surface(
                         modifier = Modifier.fillMaxSize(),
@@ -73,6 +78,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        vm.setForegroundState(true)
+    }
+
+    override fun onPause() {
+        vm.setForegroundState(false)
+        super.onPause()
     }
 }
 
@@ -192,7 +207,10 @@ private fun E220ChatRoot(vm: E220ChatViewModel) {
             )
             AppTab.SETTINGS -> SettingsScreen(
                 vm = vm,
-                onRefresh = vm::refreshConfig,
+                onRefresh = {
+                    vm.refreshConfig()
+                    vm.refreshDiagnostics()
+                },
                 onSave = { vm.saveConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                 onRestoreDefaults = { vm.restoreDefaultRadioConfig(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
                 onReboot = { vm.reboot(onError = { Toast.makeText(context, it, Toast.LENGTH_LONG).show() }, onSuccess = {}) },
